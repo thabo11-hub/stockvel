@@ -1,0 +1,15 @@
+{
+  "name": "stockvel",
+  "private": true,
+  "description": "A shared contributions book for stokvels: one login, many stokvels, a treasurer who confirms payments.",
+  "type": "module",
+  "engines": {
+    "node": "22.x"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.mjs"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^1.0.0"
+  }
+}
