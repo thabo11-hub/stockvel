@@ -1,0 +1,496 @@
+/* ==========================================================================
+   Components
+   The reusable building blocks. Each section starts with the markup it
+   expects, so the HTML templates in app.js and these rules read together.
+   ========================================================================== */
+
+/* ---- Buttons ----
+   <button class="btn btn--primary">Save</button>     also works on <a>
+   Variants: --primary, --danger, --ghost (dashed outline), --sm */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  min-height: var(--control);
+  padding: 0 var(--space-lg);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: var(--text-md);
+  font-weight: 650;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.btn svg { flex: none; width: 18px; height: 18px; }
+.btn:disabled { opacity: .45; }
+.btn--sm { min-height: var(--control-sm); padding: 0 var(--space-md); font-size: var(--text-sm); }
+.btn--primary { border-color: var(--pen); background: var(--pen); color: var(--on-pen); }
+.btn--danger { color: var(--late); }
+.btn--ghost { border-style: dashed; background: transparent; color: var(--ink-2); }
+
+/* A row of buttons. <div class="actions actions--end"> keeps them at their own width, on the right. */
+.actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); }
+.actions > .btn { flex: 1 1 auto; }
+.actions--end { justify-content: flex-end; }
+.actions--end > .btn { flex: 0 1 auto; }
+
+/* Square icon button. <button class="icon-btn" aria-label="Members"><svg/></button> */
+.icon-btn {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: var(--control-md);
+  height: var(--control-md);
+  padding: 0;
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+}
+.icon-btn svg { width: 20px; height: 20px; }
+.icon-btn:disabled { opacity: .3; }
+.icon-btn--sm { width: var(--control-xs); height: var(--control-xs); border-radius: var(--radius-sm); }
+.icon-btn--sm svg { width: 16px; height: 16px; }
+
+/* "‹ My stokvels" */
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  min-height: var(--control-md);
+  padding: 0 var(--space-sm) 0 var(--space-2xs);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--ink-2);
+  font-size: var(--text-md);
+  font-weight: 650;
+  text-decoration: none;
+}
+.back-btn svg { width: 20px; height: 20px; }
+
+/* A button that reads like a link: "Not you? Log out". */
+.link-btn {
+  justify-self: start;
+  padding: var(--space-2xs) 0;
+  border: 0;
+  background: none;
+  color: var(--pen);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.btn:active:not(:disabled),
+.icon-btn:active:not(:disabled) { transform: translateY(1px); }
+@media (hover: hover) {
+  .btn:not(.btn--primary):not(:disabled):hover,
+  .icon-btn:not(:disabled):hover { border-color: var(--pen); }
+}
+
+/* ---- Chip: someone's role ----
+   <span class="chip chip--accent">Treasurer</span> */
+.chip {
+  display: inline-block;
+  padding: var(--space-3xs) var(--space-sm);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-pill);
+  color: var(--ink-2);
+  font-size: var(--text-caps);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.chip--accent { border-color: var(--pen); color: var(--pen); }
+
+/* ---- Card ----
+   <section class="card">
+     <div class="card-head"><p class="label">…</p><h2>…</h2><p>…</p></div>
+     …
+     <p class="card-note">…</p>
+   </section> */
+.card {
+  display: grid;
+  gap: var(--space-md);
+  min-width: 0;
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.card-head { display: grid; gap: var(--space-3xs); }
+.card-head h2,
+.section-head h2 {
+  font-size: var(--text-xl);
+  font-weight: 750;
+  letter-spacing: -.005em;
+  line-height: 1.25;
+}
+.card-head p:not(.label),
+.section-head p { color: var(--ink-2); font-size: var(--text-sm); }
+.card-note { color: var(--ink-2); font-size: var(--text-sm); }
+.divider { margin: 0; border: 0; border-top: 1px dashed var(--rule-strong); }
+
+/* A heading above a ledger, outside any card, with an optional button.
+   <section class="section-head"><div><h2>…</h2><p>…</p></div><button class="btn btn--sm">…</button></section> */
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: 0 var(--space-3xs);
+}
+.section-head > div { display: grid; gap: var(--space-3xs); min-width: 0; }
+
+/* ---- Note: a call to action on the page ----
+   <section class="note note--info"><p><b>Heading.</b> Text.</p><button class="btn btn--sm">…</button></section>
+   Plain notes are a warm yellow; --info is blue. */
+.note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm) var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border: 1.5px dashed var(--rule-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  background: color-mix(in srgb, var(--part) 9%, var(--surface));
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+.note p { flex: 1 1 14rem; min-width: 0; }
+.note b { color: var(--ink); }
+.note--info { background: color-mix(in srgb, var(--pen) 8%, var(--surface)); }
+
+/* ---- Masking-tape title ----
+   <h1 class="tape">Sodi Stokvel</h1> */
+.tape {
+  display: inline-block;
+  max-width: 100%;
+  padding: 7px 22px 8px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, .3), rgba(0, 0, 0, .05)), var(--tape);
+  color: var(--tape-ink);
+  font-family: var(--font-hand);
+  font-size: var(--text-title);
+  font-variation-settings: var(--axes-hand);
+  font-weight: 860;
+  letter-spacing: -.01em;
+  line-height: 1.08;
+  overflow-wrap: anywhere;
+  transform: rotate(-1.4deg);
+  transform-origin: left center;
+  /* torn ends */
+  clip-path: polygon(1.8% 0, 98.2% 0, 100% 14%, 98.6% 28%, 100% 43%, 98.6% 57%, 100% 71%, 98.6% 86%, 100% 100%,
+                     1.8% 100%, 0 86%, 1.4% 71%, 0 57%, 1.4% 43%, 0 28%, 1.4% 14%);
+}
+
+/* ---- Amounts ---- */
+
+/* A label with its value. <div class="stat"><p class="label">Collected</p><p class="total">…</p></div> */
+.stat { display: grid; align-content: start; gap: var(--space-2xs); min-width: 0; }
+
+/* The big number. <p class="total"><span class="total-value">R1 100</span><span class="total-of">confirmed so far</span></p> */
+.total {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--space-3xs) var(--space-sm);
+}
+.total-value {
+  font-size: var(--text-hero);
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
+  letter-spacing: -.03em;
+  line-height: 1;
+}
+.total-of { color: var(--ink-2); font-size: var(--text-md); }
+
+/* Three figures side by side. <section class="card stats"><div class="stat">…<p class="stat-value">R500</p></div>…</section> */
+.stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-sm); }
+.stat-value {
+  font-size: clamp(17px, 5vw, 22px);
+  font-variant-numeric: tabular-nums;
+  font-weight: 760;
+  letter-spacing: -.02em;
+  overflow-wrap: anywhere;
+}
+
+/* <div class="progress" role="img" aria-label="40% collected"><i style="--w:40%"></i></div> */
+.progress {
+  height: 12px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--rule);
+}
+.progress i {
+  display: block;
+  width: var(--w, 0%);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--paid);
+}
+
+/* A labelled line with something on the right.
+   <div class="info-row"><div><p class="label">October</p><p class="info-value">Confirmed 25 Oct</p></div>…</div> */
+.info-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+}
+.info-row > div { display: grid; gap: var(--space-3xs); min-width: 0; }
+.info-value { font-size: var(--text-body); font-weight: 650; }
+
+/* Label and value pairs. <dl class="check-list"><div><dt class="label">Owing</dt><dd>…</dd></div></dl> */
+.check-list { display: grid; gap: var(--space-sm); }
+.check-list > div {
+  display: grid;
+  grid-template-columns: 7.6rem minmax(0, 1fr);
+  gap: var(--space-2xs) var(--space-md);
+  font-size: var(--text-md);
+}
+.check-list dt { padding-top: var(--space-3xs); }
+.check-list dd { overflow-wrap: anywhere; }
+@media (max-width: 380px) {
+  .check-list > div { grid-template-columns: 1fr; gap: var(--space-3xs); }
+}
+
+/* ---- List with a value on the right ----
+   <ul class="list"><li><span class="name">…</span><span class="sub">…</span><span class="amt">R500</span></li></ul>
+   --activity is a single column. */
+.list { display: grid; }
+.list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 1px var(--space-md);
+  padding: var(--space-md) 0;
+  border-bottom: 1px solid var(--rule);
+}
+.list li:last-child { border-bottom: 0; }
+.list .name { grid-column: 1; font-size: var(--text-body); }
+.list .sub { grid-column: 1; }
+.list .amt,
+.list .btn,
+.list .no-stamp { grid-column: 2; grid-row: 1 / span 2; }
+.list--activity li { grid-template-columns: minmax(0, 1fr); }
+.activity-text { font-size: var(--text-md); }
+
+/* ---- Who was at a meeting ----
+   <div class="people"><div><p class="label">Present (3)</p>
+     <ul class="name-pills"><li class="present is-me"><i></i>Thabo (you)</li></ul></div></div> */
+.people { display: grid; gap: var(--space-md); }
+.people > div { display: grid; gap: var(--space-xs); }
+.name-pills { display: flex; flex-wrap: wrap; gap: var(--space-xs); }
+.name-pills li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: var(--space-2xs) var(--space-md);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-pill);
+  background: var(--paper);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+.name-pills li.is-me { border-color: var(--pen); color: var(--pen); }
+.name-pills i { width: 8px; height: 8px; border-radius: 50%; }
+.name-pills .present i { background: var(--paid); }
+.name-pills .apology i { background: var(--part); }
+.name-pills .absent i { box-shadow: inset 0 0 0 2px var(--late); }
+.name-pills .unmarked i { box-shadow: inset 0 0 0 1.5px var(--rule-strong); }
+
+/* ---- Show more ----
+   <details class="disclosure"><summary>Every month (3)</summary>…</details> */
+.disclosure { padding-top: var(--space-md); border-top: 1px solid var(--rule); }
+.disclosure summary {
+  color: var(--pen);
+  font-size: var(--text-md);
+  font-weight: 650;
+  list-style: none;
+  cursor: pointer;
+}
+.disclosure summary::-webkit-details-marker { display: none; }
+.disclosure summary::after {          /* a chevron that turns when open */
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: var(--space-sm);
+  border: solid currentColor;
+  border-width: 0 2px 2px 0;
+  vertical-align: 3px;
+  transform: rotate(45deg);
+  transition: transform var(--dur-fast) ease;
+}
+.disclosure[open] summary { margin-bottom: var(--space-md); }
+.disclosure[open] summary::after { vertical-align: 0; transform: rotate(-135deg); }
+
+/* ---- Segmented control: pick one ----
+   <div class="segmented" role="group" aria-label="Show">
+     <button type="button" aria-pressed="true">Payments</button><button type="button" aria-pressed="false">Meetings</button>
+   </div>
+   Buttons share the width equally; --compact sizes them to their labels. */
+.segmented {
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  gap: var(--space-2xs);
+  padding: var(--space-2xs);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+}
+.segmented button {
+  min-height: var(--control-sm);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+.segmented button[aria-pressed="true"] {
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--rule-strong), 0 1px 3px rgba(0, 0, 0, .08);
+  color: var(--ink);
+}
+/* Attendance buttons fill with the colour of the mark. */
+.segmented button[data-a][aria-pressed="true"] { box-shadow: none; color: var(--surface); }
+.segmented button[data-a="present"][aria-pressed="true"] { background: var(--paid); }
+.segmented button[data-a="apology"][aria-pressed="true"] { background: var(--part); }
+.segmented button[data-a="absent"][aria-pressed="true"] { background: var(--late); }
+.segmented--compact { grid-auto-columns: auto; gap: var(--space-3xs); padding: 3px; }
+.segmented--compact button { padding: 0 var(--space-sm); font-size: var(--text-xs); }
+
+/* ---- Forms ----
+   <form class="form">
+     <label class="field" for="x"><span class="field-label">Name</span><input id="x"><small>Help text</small></label>
+     <p class="form-error" role="alert" hidden></p>
+   </form> */
+.form { display: grid; gap: var(--space-md); }
+.field {
+  display: grid;
+  gap: var(--space-xs);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.field-label {
+  padding: 0;
+  color: var(--ink-2);
+  font-size: var(--text-caps);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+.field small { color: var(--ink-3); font-size: var(--text-xs); }
+.form-error { color: var(--late); font-size: var(--text-md); font-weight: 600; }
+
+/* Two fields side by side. */
+.field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-md); }
+
+/* An amount in rand. <span class="money-input"><i>R</i><input></span> */
+.money-input { position: relative; display: block; }
+.money-input i {
+  position: absolute;
+  top: 50%;
+  left: var(--space-md);
+  color: var(--ink-3);
+  font-style: normal;
+  font-weight: 650;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+.money-input input { padding-left: 28px; }
+
+/* Big radio cards.
+   <fieldset class="field choice-group"><legend class="field-label">…</legend>
+     <label class="choice"><input type="radio"><span><b>Title</b><small>Detail</small></span></label>
+   </fieldset> */
+.choice-group { display: grid; gap: var(--space-sm); }
+.choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.choice:has(input:checked) { border-color: var(--pen); background: var(--pen-soft); }
+.choice input { width: 18px; height: 18px; margin: var(--space-3xs) 0 0; accent-color: var(--pen); }
+
+/* A checkbox row. <label class="toggle"><span><b>Title</b><small>Detail</small></span><input type="checkbox"></label> */
+.toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+}
+.toggle input { flex: none; width: 22px; height: 22px; accent-color: var(--pen); }
+.choice b,
+.toggle b { display: block; font-size: var(--text-body); font-weight: 700; }
+.choice small,
+.toggle small { display: block; color: var(--ink-2); font-size: var(--text-sm); }
+
+/* An input with its button. <form class="input-row"><input><button class="btn">Add</button></form> */
+.input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-sm); }
+
+/* "Remove Lerato?" and the delete area in settings. */
+.confirm-box,
+.danger-zone {
+  display: grid;
+  gap: var(--space-md);
+  padding: var(--space-md);
+  border: 1.5px dashed var(--late);
+  border-radius: var(--radius-md);
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+.confirm-box b,
+.danger-zone b { color: var(--ink); }
+
+/* ---- Chat bubble: a preview of a WhatsApp message ---- */
+.bubble {
+  margin: 0;
+  padding: var(--space-md) var(--space-lg);
+  border-radius: var(--radius-md) var(--radius-md) var(--radius-md) var(--radius-xs);
+  background: var(--pen-soft);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-md);
+  font-variation-settings: var(--axes-chat);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+/* ---- Loading line: "Opening the book…" ---- */
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-2xl) 0;
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+.loading i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: blink 1.2s ease-in-out infinite;
+}

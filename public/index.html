@@ -11,15 +11,21 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Recursive:wght,CASL,MONO@300..1000,0..1,0..1&display=swap">
-<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/base.css">
+<link rel="stylesheet" href="/css/components.css">
+<link rel="stylesheet" href="/css/ledger.css">
+<link rel="stylesheet" href="/css/views.css">
+<link rel="stylesheet" href="/css/overlays.css">
+<link rel="stylesheet" href="/css/utilities.css">
 </head>
 <body>
 <div class="app" id="app">
   <noscript><p class="empty">Stokvel needs JavaScript. Turn it on in your browser settings, then reload this page.</p></noscript>
 </div>
-<nav class="tabbar" id="tabbar" aria-label="Sections" hidden><div class="in" id="tabs"></div></nav>
+<nav class="tabbar" id="tabbar" aria-label="Sections" hidden><div class="tabbar-inner" id="tabs"></div></nav>
 <div class="sheet" id="sheet" hidden></div>
-<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<div class="toast-region" id="toast" role="status" aria-live="polite"></div>
 <script type="module" src="/app.js"></script>
 </body>
 </html>

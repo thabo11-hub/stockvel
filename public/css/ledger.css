@@ -1,0 +1,286 @@
+/* ==========================================================================
+   The book
+   Ledger pages with a red margin, rubber stamps, tallies and the record
+   grid. State classes are the plain words the data uses: paid, late, part,
+   missed, open, future (payments) and present, apology, absent (meetings).
+   ========================================================================== */
+
+/* ---- Ledger page ----
+   <ol class="ledger">
+     <li class="ledger-row">                     states: is-recipient, is-me, is-now, is-past
+       <span class="row-num">1</span>             the margin: a number, or <b>Oct</b><small>2026</small>
+       <button class="row-main"><span class="name">…</span><span class="sub">…</span></button>
+       <div class="row-end">…a stamp or a button…</div>
+     </li>
+   </ol>
+   .ledger-row--head is a row of column labels. */
+.ledger {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.ledger::before {                      /* the red margin line */
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: var(--margin-col);
+  width: 1.5px;
+  background: var(--margin);
+  opacity: .75;
+  pointer-events: none;
+}
+.ledger-row {
+  display: grid;
+  grid-template-columns: var(--margin-col) minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: var(--row-min);
+  padding-right: var(--space-md);
+  border-bottom: 1px solid var(--rule);
+}
+.ledger-row:last-child { border-bottom: 0; }
+.ledger-row.is-recipient,
+.ledger-row.is-now,
+.ledger-row.is-me { background: linear-gradient(90deg, var(--pen-soft), transparent 75%); }
+.ledger-row.is-past .name { color: var(--ink-2); }
+.ledger-row--head { min-height: 40px; }
+.ledger-row--head .label { padding-left: var(--space-md); }
+
+.row-num {
+  display: grid;
+  justify-items: center;
+  justify-self: center;
+  gap: var(--space-2xs);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  font-variation-settings: var(--axes-margin);
+  line-height: 1.1;
+}
+.row-num b {
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+.row-num small { font-size: var(--text-micro); }
+
+.row-main {
+  display: grid;
+  align-content: center;
+  align-self: stretch;
+  gap: var(--space-3xs);
+  min-width: 0;
+  padding: var(--space-sm) var(--space-sm) var(--space-sm) var(--space-md);
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  text-align: left;
+}
+@media (hover: hover) {
+  button.row-main:hover { background: color-mix(in srgb, var(--pen-soft) 60%, transparent); }
+}
+.row-end { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-sm); }
+
+/* Meeting mark in the margin. <i class="att-dot present"></i> */
+.att-dot { display: block; width: 9px; height: 9px; border-radius: 50%; }
+.att-dot.present { background: var(--paid); }
+.att-dot.apology { background: var(--part); }
+.att-dot.absent { box-shadow: inset 0 0 0 2px var(--late); }
+
+/* Move a turn earlier or later. */
+.move-btns { display: inline-flex; gap: var(--space-xs); }
+
+/* ---- Rubber stamps ----
+   <span class="stamp paid" style="--rot:-3deg"><b>Paid</b><small>25 Oct</small></span>
+   States: paid, late, part, done (paid out). .is-pressed plays the stamping motion. */
+.stamp {
+  display: inline-grid;
+  justify-items: center;
+  gap: var(--space-3xs);
+  min-width: 66px;
+  padding: 5px var(--space-sm) var(--space-2xs);
+  border: 2px solid currentColor;
+  border-radius: 6px;
+  outline: 1px solid currentColor;
+  outline-offset: 2px;
+  font-family: var(--font-mono);
+  font-variation-settings: var(--axes-mono);
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+  opacity: .9;
+  transform: rotate(var(--rot, -4deg));
+}
+.stamp b { font-size: var(--text-xs); font-weight: 860; letter-spacing: .16em; }
+.stamp small { font-size: var(--text-micro); font-weight: 650; letter-spacing: .06em; }
+.stamp.paid { color: var(--paid); }
+.stamp.late { color: var(--late); }
+.stamp.part { color: var(--part); }
+.stamp.done { color: var(--pen); }
+.stamp.is-pressed { animation: press var(--dur-slow) var(--ease-spring) both; }
+@keyframes press {
+  0% { opacity: 0; transform: rotate(var(--rot, -4deg)) scale(1.9); }
+  55% { opacity: 1; transform: rotate(var(--rot, -4deg)) scale(.92); }
+  100% { opacity: .9; transform: rotate(var(--rot, -4deg)) scale(1); }
+}
+
+/* The button around a stamp: tap it to change or clear the confirmation. */
+.stamp-btn {
+  padding: var(--space-sm) var(--space-2xs);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  color: inherit;
+}
+
+/* "Confirm" and "Mark paid out": a dashed space waiting for a stamp. */
+.confirm-btn {
+  min-height: var(--control-md);
+  padding: 0 var(--space-md);
+  border: 1.5px dashed var(--rule-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 650;
+  white-space: nowrap;
+}
+@media (hover: hover) {
+  .confirm-btn:hover { border-color: var(--pen); color: var(--pen); }
+}
+
+/* In a member's history: "Not yet" or "Owing" where the amount would be. */
+.no-stamp {
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  font-weight: 650;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+/* A small stamp after a month. <span class="mini-stamp paid">Paid</span> */
+.mini-stamp {
+  display: inline-block;
+  min-width: 48px;
+  padding: 3px var(--space-xs);
+  border: 1.5px solid currentColor;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-size: var(--text-micro);
+  font-variation-settings: var(--axes-mono);
+  font-weight: 820;
+  letter-spacing: .12em;
+  text-align: center;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transform: rotate(-3deg);
+}
+.mini-stamp.paid { color: var(--paid); }
+.mini-stamp.late { color: var(--late); }
+.mini-stamp.part { color: var(--part); }
+
+/* ---- Tally: one block per member ----
+   <div class="tally" style="--n:5"><i class="paid"></i><i class="part" style="--p:40%"></i><i></i>…</div>
+   --g narrows the gaps for big groups. --meet draws thin pills for attendance. */
+.tally {
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  gap: var(--g, var(--space-2xs));
+}
+.tally i { display: block; height: 12px; border-radius: var(--radius-xs); background: var(--rule); }
+.tally i.paid,
+.tally i.present { background: var(--paid); }
+.tally i.late { background: var(--late); }
+.tally i.part { background: linear-gradient(90deg, var(--part) var(--p, 50%), var(--rule) var(--p, 50%)); }
+.tally i.apology { background: var(--part); }
+.tally i.missed,
+.tally i.absent { background: transparent; box-shadow: inset 0 0 0 1.5px var(--late); }
+.tally--meet i { height: 8px; border-radius: var(--radius-pill); }
+
+/* ---- Record grid: members down, months across ----
+   <div class="grid-scroll"><table class="record-grid">
+     <thead><tr><th>…</th><th class="is-now"><button>O</button></th>…</tr></thead>
+     <tbody><tr><th scope="row"><span>Name</span></th><td class="is-now"><i class="cell paid"></i></td>…</tr></tbody>
+   </table></div> */
+.grid-scroll { overflow-x: auto; margin: 0 calc(-1 * var(--space-xs)); padding: 0 var(--space-xs) var(--space-2xs); }
+.record-grid { --cell: 18px; border-collapse: separate; border-spacing: 3px; }
+.record-grid thead th { padding: 0; font-weight: 400; }
+.record-grid thead button {
+  display: block;
+  width: var(--cell);
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: none;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-caps);
+  font-variation-settings: var(--axes-margin);
+}
+.record-grid thead .is-now button { color: var(--pen); font-weight: 800; }
+.record-grid tbody th { padding: 0 var(--space-sm) 0 0; font-weight: 600; text-align: left; }
+.record-grid tbody th span {
+  display: block;
+  max-width: 7.5rem;
+  overflow: hidden;
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.record-grid td { padding: 0; }
+.record-grid td.is-now .cell { outline: 1.5px solid var(--pen); outline-offset: 1px; }
+
+/* One cell: a square for a payment, a circle for a meeting. Size comes from --cell. */
+.cell {
+  position: relative;
+  display: block;
+  width: var(--cell, 18px);
+  height: var(--cell, 18px);
+  border-radius: calc(var(--cell, 18px) * .22);
+}
+.cell.paid { background: var(--paid); }
+.cell.late { background: var(--late); }
+.cell.part { background: linear-gradient(135deg, var(--part) 50%, transparent 50%); box-shadow: inset 0 0 0 1.5px var(--part); }
+.cell.missed {
+  background: repeating-linear-gradient(135deg, transparent 0 3px, var(--late) 3px 4.5px);
+  box-shadow: inset 0 0 0 1.5px var(--late);
+}
+.cell.open { box-shadow: inset 0 0 0 1.5px var(--rule-strong); }
+.cell.future { background: var(--rule); }
+.cell.present,
+.cell.apology,
+.cell.absent,
+.cell.nomeet { border-radius: 50%; }
+.cell.present { background: var(--paid); }
+.cell.apology { background: var(--part); }
+.cell.absent { box-shadow: inset 0 0 0 2px var(--late); }
+.cell.nomeet { box-shadow: inset 0 0 0 1.5px var(--rule-strong); }
+.cell.na::before {                    /* not a member that month: a dash */
+  content: "";
+  position: absolute;
+  top: calc(50% - 1px);
+  right: 22%;
+  left: 22%;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--rule-strong);
+}
+
+/* Key under the grid. <ul class="legend"><li><i class="cell paid"></i>Paid</li></ul> */
+.legend {
+  --cell: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+  color: var(--ink-2);
+  font-size: var(--text-xs);
+}
+.legend li { display: inline-flex; align-items: center; gap: var(--space-xs); }

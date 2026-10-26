@@ -37,10 +37,32 @@ The app runs on http://localhost:3000.
 ## How it's built
 
 - `public/` holds the web app: plain HTML, CSS and JavaScript, with no build step.
+  - `public/app.js` renders every screen and handles taps, forms and saving.
   - `public/logic.js` contains the month and money rules, shared by the browser and the API.
+  - `public/css/` holds the styles (see below).
 - `api/index.js` is a single Vercel function that serves every `/api/*` route.
 - `lib/db.js` holds the Neon connection and the schema. `lib/auth.js` handles phone numbers, password hashing (scrypt) and session cookies.
-- `scripts/dev.mjs` is the local server. `scripts/pg-local.mjs` is a tiny Postgres client for local testing.
+- `scripts/dev.mjs` is the local server. It sends the same security headers as production. `scripts/pg-local.mjs` is a tiny Postgres client for local testing.
+
+### Styles
+
+`index.html` loads the stylesheets in this order:
+
+| File | What's in it |
+| --- | --- |
+| `tokens.css` | Design tokens: colours (light and dark), type sizes, a 4px spacing scale, radii, shadows, layers and motion. |
+| `base.css` | A small reset, the page column, text roles shared by many components (`.label`, `.name`, `.sub`), and reduced-motion support. |
+| `components.css` | Building blocks: buttons, chips, cards, notes, the masking-tape title, amounts, lists, the segmented control and forms. |
+| `ledger.css` | The book itself: ledger rows with the red margin, rubber stamps, tallies and the record grid. |
+| `views.css` | Layout for single screens: the stokvel header, month navigation, home, sign-in and the loading cover. |
+| `overlays.css` | Bottom sheets, the treasurer's tab bar and toasts. |
+| `utilities.css` | Single-purpose helpers such as `.text-bad`. Loaded last so they always win. |
+
+Conventions:
+- Every colour, size and timing comes from a token in `tokens.css`. Dark mode only changes the colour tokens.
+- Class names follow one pattern: a block (`.btn`), its variants (`.btn--primary`), and its states (`.is-selected`). Payment and attendance states use the words from the data (`paid`, `late`, `part`, `present`, `absent`).
+- Each section in a stylesheet starts with the HTML it expects, so the templates in `app.js` and the CSS read together.
+- Hover effects only apply on devices that can hover. Text colours meet WCAG AA contrast in both themes.
 
 Security notes:
 - Passwords are hashed with scrypt.
@@ -48,3 +70,4 @@ Security notes:
 - Changes need a same-origin request with an app header.
 - Repeated wrong passwords lock a phone number for 15 minutes.
 - Invite links are single-use and expire after 14 days.
+- Pages are served with a Content Security Policy that only allows the app's own scripts, so injected script can't run.

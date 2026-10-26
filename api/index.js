@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import { q, one, ensureSchema, dbConfigured, iso } from '../lib/db.js';
 import {
-  COOKIE, SESSION_DAYS, normalizePhone, formatPhone, hashPassword, verifyPassword,
+  COOKIE, SESSION_DAYS, normalizePhone, oldPhoneForm, formatPhone, hashPassword, verifyPassword,
   newToken, sha256, safeEqual, readCookie, sessionCookie,
 } from '../lib/auth.js';
 import {
@@ -237,10 +237,16 @@ async function postSetup({ req, res, body }) {
   return { user: publicUser({ id: row.id, name, phone, is_admin: true }) };
 }
 
-async function checkPassword(phone, password) {
+// A phone number as typed, and the form older accounts may have stored it in.
+const phoneForms = input => { const p = phoneOf(input); return [p, oldPhoneForm(p)]; };
+
+async function checkPassword(input, password) {
+  const [phone, legacy] = phoneForms(input);
   const lock = await one(`SELECT count, (last_at > now() - interval '15 minutes') AS recent FROM login_failures WHERE phone = $1`, [phone]);
   if (lock && lock.recent && lock.count >= 8) fail(429, 'Too many wrong tries. Wait 15 minutes, then try again.', 'locked');
-  const user = await one(`SELECT id::text AS id, name, phone, is_admin, pass_hash FROM users WHERE phone = $1`, [phone]);
+  const user = await one(
+    `SELECT id::text AS id, name, phone, is_admin, pass_hash FROM users
+      WHERE phone = $1 OR phone = $2 ORDER BY (phone = $1) DESC LIMIT 1`, [phone, legacy]);
   const ok = await verifyPassword(String(password || ''), user ? user.pass_hash : '');
   if (!user || !ok) {
     await q(
@@ -255,7 +261,7 @@ async function checkPassword(phone, password) {
 }
 
 async function postLogin({ req, res, body }) {
-  const user = await checkPassword(phoneOf(body.phone), body.password);
+  const user = await checkPassword(body.phone, body.password);
   await startSession(req, res, user.id);
   await q(`DELETE FROM sessions WHERE expires_at < now()`);
   return { user: publicUser(user) };
@@ -346,9 +352,9 @@ async function acceptInvite({ req, res, params, user, body }) {
 
   if (!user && body.mode !== 'login') {
     const name = text(body.name, 'your name');
-    const phone = phoneOf(body.phone);
+    const [phone, legacy] = phoneForms(body.phone);
     const hash = await hashPassword(passwordOf(body.password));
-    const taken = await one(`SELECT 1 AS x FROM users WHERE phone = $1`, [phone]);
+    const taken = await one(`SELECT 1 AS x FROM users WHERE phone = $1 OR phone = $2`, [phone, legacy]);
     if (taken) fail(409, 'There’s already an account for this number. Choose “I already have an account” and log in.', 'phone_taken');
     let row;
     try {
@@ -378,7 +384,7 @@ async function acceptInvite({ req, res, params, user, body }) {
 
   let userId = user && user.id;
   if (!user) {
-    const u = await checkPassword(phoneOf(body.phone), body.password);
+    const u = await checkPassword(body.phone, body.password);
     userId = u.id;
     await startSession(req, res, userId);
   }
@@ -428,10 +434,10 @@ async function listStokvels({ user, url }) {
             me.name AS my_name, coalesce(s.treasurer_id = me.id, false) AS is_treasurer,
             t.name AS treasurer_name, (t.user_id IS NOT NULL) AS treasurer_joined,
             (SELECT count(*)::int FROM members x WHERE x.stokvel_id = s.id AND x.joined_month <= $2 AND (x.left_month = '' OR x.left_month > $2)) AS active_count,
-            (SELECT coalesce(sum(c.amount), 0)::int FROM contributions c WHERE c.stokvel_id = s.id) AS total_collected,
+            (SELECT coalesce(sum(c.amount), 0)::int FROM contributions c WHERE c.stokvel_id = s.id AND c.month >= s.start_month) AS total_collected,
             (SELECT coalesce(sum(c.amount), 0)::int FROM contributions c WHERE c.stokvel_id = s.id AND c.month = $2) AS month_collected,
             (SELECT count(*)::int FROM contributions c WHERE c.stokvel_id = s.id AND c.month = $2 AND c.status <> 'part') AS month_paid,
-            (SELECT coalesce(sum(c.amount), 0)::int FROM contributions c WHERE c.member_id = me.id) AS my_total,
+            (SELECT coalesce(sum(c.amount), 0)::int FROM contributions c WHERE c.member_id = me.id AND c.month >= s.start_month) AS my_total,
             (SELECT c.status FROM contributions c WHERE c.member_id = me.id AND c.month = $2) AS my_status,
             (SELECT c.amount FROM contributions c WHERE c.member_id = me.id AND c.month = $2) AS my_amount,
             coalesce(s.created_by = $1::uuid, false) AS created_by_me
@@ -634,6 +640,8 @@ async function removeMember({ params, user }) {
   needManage(a);
   const m = await memberOf(a.id, params[1]);
   if (m.id === a.treasurer_id) fail(409, `${m.name} is the treasurer. Make someone else treasurer first.`);
+  // Removing yourself would take the stokvel off your own list, with nobody left to run it.
+  if (m.user_id && m.user_id === user.id) fail(409, 'You can’t remove yourself from the stokvel.', 'self');
   if (m.left_month) return { ok: true };
   const now = saMonth();
   const h = await one(

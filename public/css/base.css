@@ -1,0 +1,136 @@
+/* ==========================================================================
+   Base
+   A light reset, element defaults, the page column, text roles that many
+   components share, and the motion rules.
+   Resets use :where() so they carry no specificity and any class wins.
+   Inside a rule, properties run: position, layout, box, colour, type, motion.
+   ========================================================================== */
+
+/* ---- Reset ---- */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+html.is-locked { overflow: hidden; }   /* set while a sheet is open */
+
+body {
+  margin: 0;
+  padding:
+    calc(var(--page-top) + var(--safe-top))
+    max(var(--gutter), var(--safe-right))
+    calc(var(--page-bottom) + var(--safe-bottom))
+    max(var(--gutter), var(--safe-left));
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: var(--text-body);
+  font-variation-settings: var(--axes-ui);
+  line-height: var(--leading);
+  -webkit-tap-highlight-color: transparent;
+}
+body.has-tabs { padding-bottom: calc(var(--page-bottom-tabs) + var(--safe-bottom)); }
+
+[hidden] { display: none !important; }
+h1, h2, h3, p, dl, dd, pre { margin: 0; }
+h1, h2, h3 { text-wrap: balance; }
+:where(ul[class], ol[class]) { margin: 0; padding: 0; list-style: none; }
+a { color: var(--pen); }
+
+button, input, select, textarea {
+  color: inherit;
+  font: inherit;
+  font-variation-settings: inherit;
+}
+button { cursor: pointer; touch-action: manipulation; }
+button:disabled { cursor: default; }
+:focus-visible { outline: 2px solid var(--pen); outline-offset: 2px; }
+
+/* Text inputs, selects and text areas. Radios and checkboxes keep their native look. */
+:where(input:not([type="radio"]):not([type="checkbox"]), select, textarea) {
+  width: 100%;
+  min-height: var(--control);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-md);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: var(--text-lg);
+}
+:where(textarea) { min-height: 128px; line-height: 1.5; resize: vertical; }
+
+/* ---- The page: one centred column ---- */
+.app {
+  display: grid;
+  gap: var(--space-lg);
+  max-width: var(--column);
+  margin: 0 auto;
+}
+
+/* ---- Text roles ---- */
+
+/* Small capitals above a value: "COLLECTED", "WHAT I'VE PAID". */
+.label {
+  color: var(--ink-3);
+  font-size: var(--text-caps);
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+}
+
+/* A member's name, and the quieter line under it. */
+.name {
+  font-size: var(--text-lg);
+  font-weight: 650;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+.sub {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+/* "Treasurer", "This month": a tag after a name. <em class="tag tag--accent"> */
+.tag {
+  margin-left: var(--space-2xs);
+  color: var(--ink-3);
+  font-size: var(--text-caps);
+  font-style: normal;
+  font-weight: 700;
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.tag--accent { color: var(--pen); }
+
+/* An amount of money in a row or list. */
+.amt {
+  font-size: var(--text-body);
+  font-variant-numeric: tabular-nums;
+  font-weight: 720;
+  white-space: nowrap;
+}
+
+.lead { color: var(--ink-2); font-size: var(--text-md); }
+.empty { color: var(--ink-2); font-size: var(--text-md); }
+.fineprint { color: var(--ink-3); font-size: var(--text-xs); }
+.hint {
+  padding: 0 var(--space-md);
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  text-align: center;
+}
+
+/* ---- Motion ---- */
+@keyframes blink { 50% { opacity: .4; } }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}

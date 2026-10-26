@@ -1,0 +1,238 @@
+/* ==========================================================================
+   Screens
+   Layout that belongs to one screen: the stokvel header, the month view,
+   home, sign-in and the loading cover.
+   ========================================================================== */
+
+/* ---- Top bar and stokvel header ----
+   <header class="page-head">
+     <div class="topbar"><a class="back-btn">…</a><span class="sync">…</span><span class="topbar-actions">…</span></div>
+     <h1 class="tape">Sodi Stokvel</h1>
+     <p class="page-meta"><span>Rotating payout · R500 a month</span><span class="chip">Member</span></p>
+     <p class="page-sub">Tshepo is the treasurer and confirms payments.</p>
+   </header> */
+.page-head { display: grid; justify-items: start; gap: var(--space-md); }
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  min-height: var(--control-md);
+}
+.topbar-actions { display: inline-flex; gap: var(--space-sm); margin-left: auto; }
+.app-name {
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+  font-weight: 800;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+}
+.page-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2xs) var(--space-sm);
+  color: var(--ink-2);
+  font-size: var(--text-sm);
+}
+.page-sub { color: var(--ink-2); font-size: var(--text-sm); }
+
+/* "Saving…" while a change is on its way to the server. */
+.sync {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  color: var(--ink-3);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.sync i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pen);
+  animation: blink 1s ease-in-out infinite;
+}
+
+/* ---- Month navigation ----
+   <div class="month-nav"><button class="icon-btn">‹</button><div class="month-title"><h2>…</h2><p>…</p></div><button class="icon-btn">›</button></div> */
+.month-nav {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.month-title { display: grid; gap: 1px; text-align: center; }
+.month-title h2 {
+  font-family: var(--font-hand);
+  font-size: var(--text-2xl);
+  font-variation-settings: var(--axes-hand);
+  font-weight: 820;
+  line-height: 1.15;
+}
+.month-title p { color: var(--ink-3); font-size: var(--text-xs); letter-spacing: .03em; }
+
+/* ---- Month summary (treasurer) ----
+   <div class="summary"><div class="stat">…</div><div class="summary-side">…</div></div> */
+.summary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-md) var(--space-lg);
+}
+.summary-side { display: grid; gap: var(--space-3xs); min-width: 0; text-align: right; }
+.summary-who { font-size: var(--text-lg); font-weight: 750; overflow-wrap: anywhere; }
+.summary-when { color: var(--ink-2); font-size: var(--text-sm); }
+@media (max-width: 360px) {
+  .summary { grid-template-columns: 1fr; }
+  .summary-side { text-align: left; }
+}
+
+.ledger-foot { display: flex; justify-content: center; }
+
+/* Earlier meetings, in the member view. */
+.meeting-list { display: grid; gap: var(--space-lg); }
+.meeting-list > div { display: grid; gap: var(--space-sm); }
+.meeting-list h3 { font-size: var(--text-md); font-weight: 700; }
+
+/* ---- Home ---- */
+.greeting { display: grid; gap: var(--space-3xs); padding: 0 var(--space-3xs); }
+.greeting h1 {
+  font-family: var(--font-hand);
+  font-size: clamp(26px, 7.6vw, 32px);
+  font-variation-settings: var(--axes-hand);
+  font-weight: 860;
+  line-height: 1.1;
+}
+.greeting p { color: var(--ink-2); font-size: var(--text-md); }
+
+/* One card per stokvel, linking to its book.
+   <a class="stokvel-card" href="/s/…">
+     <span class="tape">…</span>
+     <div class="tags"><span class="chip">Member</span><span class="sub">…</span></div>
+     <div class="facts"><div><span>You’ve paid</span><b>R1 100</b><span>…</span></div>…</div>
+     <span class="chev"><svg/></span>
+   </a> */
+.stokvel-list { display: grid; gap: var(--space-md); }
+.stokvel-card {
+  position: relative;
+  display: grid;
+  gap: var(--space-md);
+  overflow: hidden;
+  padding: var(--space-lg);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+  color: inherit;
+  text-decoration: none;
+}
+.stokvel-card::before {               /* the red margin down the left edge */
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 5px;
+  background: var(--margin);
+  opacity: .8;
+}
+@media (hover: hover) {
+  .stokvel-card:hover { box-shadow: 0 0 0 2px var(--pen-soft), var(--shadow-card); }
+}
+.stokvel-card .tape {
+  justify-self: start;
+  max-width: calc(100% - var(--space-3xl));
+  padding: 5px var(--space-lg) 6px;
+  font-size: clamp(20px, 5.8vw, 24px);
+}
+.stokvel-card .tags { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-xs); }
+.stokvel-card .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-md); }
+.stokvel-card .facts > div { display: grid; align-content: start; gap: var(--space-3xs); min-width: 0; }
+.stokvel-card .facts span { color: var(--ink-2); font-size: var(--text-sm); }
+.stokvel-card .facts b {
+  font-size: var(--text-xl);
+  font-variant-numeric: tabular-nums;
+  font-weight: 740;
+  overflow-wrap: anywhere;
+}
+.stokvel-card .chev { position: absolute; top: var(--space-lg); right: var(--space-md); color: var(--ink-3); }
+.stokvel-card .chev svg { width: 22px; height: 22px; }
+
+/* ---- Sign-in, setup and invites ---- */
+.auth { display: grid; gap: var(--space-lg); padding-block: 3vh 2vh; }
+.auth-card {
+  display: grid;
+  gap: var(--space-lg);
+  padding: var(--space-2xl) var(--space-xl);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--shadow-card);
+}
+.auth-card .tape { justify-self: start; font-size: clamp(24px, 7vw, 30px); }
+.auth-foot { padding: 0 var(--space-md); color: var(--ink-2); font-size: var(--text-sm); text-align: center; }
+.steps {
+  display: grid;
+  gap: var(--space-xs);
+  padding-left: var(--space-xl);
+  color: var(--ink-2);
+  font-size: var(--text-md);
+  list-style: decimal;
+}
+.steps b { color: var(--ink); }
+
+/* ---- Loading cover (first open only) ---- */
+.cover { display: grid; place-items: center; padding-block: 5vh 2vh; }
+.cover-book {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  width: min(100%, 21rem);
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border-radius: 6px 14px 14px 6px;
+  background: var(--cover);
+  box-shadow: var(--shadow-book);
+  color: var(--cover-ink);
+}
+.cover-spine {
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, .28), transparent 40%, rgba(255, 255, 255, .1) 70%, rgba(0, 0, 0, .22)),
+    var(--spine);
+}
+.cover-face {
+  display: grid;
+  align-content: space-between;
+  gap: var(--space-xl);
+  min-width: 0;
+  padding: 28px var(--space-2xl) var(--space-2xl);
+  background-image:                   /* cloth texture */
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, .03) 0 2px, transparent 2px 4px),
+    repeating-linear-gradient(90deg, rgba(255, 255, 255, .02) 0 2px, transparent 2px 4px);
+}
+.cover .tape { justify-self: start; font-size: clamp(25px, 8vw, 31px); }
+.cover-list { display: grid; gap: var(--space-sm); font-size: var(--text-md); opacity: .92; }
+.cover-list li { position: relative; padding-left: var(--space-xl); }
+.cover-list li::before {              /* a ticked-off box */
+  content: "";
+  position: absolute;
+  top: .42em;
+  left: 0;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  transform: rotate(-6deg);
+}
+.cover-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: var(--text-sm);
+  opacity: .82;
+}
+.cover-status i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: blink 1.2s ease-in-out infinite;
+}

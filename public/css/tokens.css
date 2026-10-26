@@ -1,0 +1,158 @@
+/* ==========================================================================
+   Design tokens
+   Every colour, size, shadow and timing the app uses lives here. The other
+   stylesheets refer to these variables instead of raw values, so a change in
+   this file carries through the whole app. Dark mode only swaps colours.
+
+   Stylesheets, in the order index.html loads them:
+     tokens.css      this file
+     base.css        reset, page column, shared text roles, motion
+     components.css  buttons, cards, forms and other building blocks
+     ledger.css      the book itself: ledger rows, stamps, tallies, the record grid
+     views.css       layout that belongs to one screen
+     overlays.css    bottom sheets, the tab bar and toasts
+     utilities.css   single-purpose helpers (loaded last so they win)
+
+   Naming: a block (.btn), its variants (.btn--primary), its states (.is-selected).
+   Payment and attendance states are the plain words the data uses
+   (paid, late, part, missed, open, future, present, apology, absent).
+   ========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  /* ---- Colour: paper and ink ---- */
+  --paper: #f5f7fb;          /* page background */
+  --surface: #ffffff;        /* cards, sheets and ledger pages */
+  --ink: #16203b;            /* main text */
+  --ink-2: #4c5873;          /* secondary text */
+  --ink-3: #616c86;          /* labels and quiet text; still 4.5:1 on paper */
+  --rule: #e1e7f1;           /* hairlines */
+  --rule-strong: #c8d3e5;    /* borders of controls */
+  --margin: #e3898b;         /* the exercise book's red margin line */
+
+  /* ---- Colour: the treasurer's blue pen (accent) ---- */
+  --pen: #2444c2;
+  --pen-soft: #e9eefc;
+  --on-pen: #ffffff;
+
+  /* ---- Colour: payment and attendance ---- */
+  --paid: #1b7550;           /* paid in full, present */
+  --late: #bd3329;           /* paid late, owing, absent */
+  --part: #965b0a;           /* part payment, apology */
+
+  /* ---- Colour: the book cover and its masking tape ---- */
+  --tape: #efe3bf;
+  --tape-ink: #1f1c14;
+  --cover: #1c2a4f;
+  --cover-ink: #eaeef8;
+  --spine: #8e2331;
+
+  /* ---- Depth ---- */
+  --scrim: rgba(12, 17, 32, .48);
+  --shadow-card: 0 1px 2px rgba(22, 32, 59, .06), 0 10px 28px rgba(22, 32, 59, .07);
+  --shadow-sheet: 0 -10px 40px rgba(0, 0, 0, .2);
+  --shadow-float: 0 10px 30px rgba(0, 0, 0, .25);
+  --shadow-book: 0 2px 4px rgba(0, 0, 0, .15), 0 24px 50px rgba(16, 24, 48, .28);
+
+  /* ---- Type ----
+     Recursive is one variable font with a casual (brush pen) axis and a
+     monospace axis, so headings, body text and stamps share one download. */
+  --font-ui: "Recursive", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-hand: "Recursive", "Segoe Print", "Marker Felt", ui-rounded, system-ui, sans-serif;
+  --font-mono: "Recursive", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --axes-ui: "CASL" 0, "MONO" 0;
+  --axes-hand: "CASL" 1, "MONO" 0;      /* headings and the tape */
+  --axes-chat: "CASL" .25, "MONO" 0;    /* WhatsApp message previews */
+  --axes-mono: "MONO" 1, "CASL" 0;      /* rubber stamps */
+  --axes-margin: "MONO" 1, "CASL" .5;   /* notes in the ledger margin */
+
+  --text-micro: 10px;        /* stamp small print */
+  --text-caps: 11px;         /* uppercase labels, chips, tab labels */
+  --text-xs: 12px;           /* fine print, hints, legends */
+  --text-sm: 13px;           /* secondary lines */
+  --text-md: 14px;           /* buttons, notes, lead text */
+  --text-body: 15px;
+  --text-lg: 16px;           /* names; 16px inputs also stop iOS zooming in */
+  --text-xl: 18px;           /* card headings */
+  --text-2xl: 22px;          /* handwritten headings */
+  --text-hero: clamp(28px, 8.4vw, 36px);
+  --text-title: clamp(25px, 7.4vw, 34px);
+  --leading: 1.45;
+  --tracking-caps: .1em;
+
+  /* ---- Space: a 4px grid ---- */
+  --space-3xs: 2px;
+  --space-2xs: 4px;
+  --space-xs: 6px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 20px;
+  --space-2xl: 24px;
+  --space-3xl: 32px;
+
+  /* ---- Shape ---- */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 12px;         /* controls */
+  --radius-lg: 16px;         /* cards */
+  --radius-xl: 20px;         /* sheets */
+  --radius-pill: 999px;
+
+  /* ---- Sizes ---- */
+  --column: 34rem;           /* the single reading column */
+  --gutter: 16px;            /* least space at the screen edges */
+  --page-top: 12px;
+  --page-bottom: 40px;
+  --page-bottom-tabs: 96px;  /* leaves room for the tab bar */
+  --control: 44px;           /* buttons and inputs */
+  --control-md: 40px;        /* icon buttons */
+  --control-sm: 36px;
+  --control-xs: 32px;
+  --margin-col: 50px;        /* the ledger's numbered margin */
+  --row-min: 64px;           /* one ledger row */
+
+  /* ---- Layers ---- */
+  --z-tabbar: 30;
+  --z-sheet: 40;
+  --z-toast: 60;
+
+  /* ---- Motion ---- */
+  --ease-out: cubic-bezier(.2, .9, .3, 1);
+  --ease-spring: cubic-bezier(.2, .9, .3, 1.25);
+  --dur-fast: .2s;
+  --dur-med: .28s;
+  --dur-slow: .36s;
+
+  /* ---- Device safe areas (notches, home bars) ---- */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #0c1120;
+    --surface: #141b2e;
+    --ink: #e5eaf5;
+    --ink-2: #a5b0c8;
+    --ink-3: #8691ab;
+    --rule: #222c45;
+    --rule-strong: #303c5b;
+    --margin: #8e4049;
+    --pen: #93abff;
+    --pen-soft: #1c2647;
+    --on-pen: #0c1120;
+    --paid: #57c690;
+    --late: #f2786c;
+    --part: #e8b054;
+    --tape: #d9cca2;
+    --cover: #1f2d55;
+    --spine: #9c2a39;
+    --scrim: rgba(0, 0, 0, .6);
+    --shadow-card: 0 1px 2px rgba(0, 0, 0, .35), 0 10px 28px rgba(0, 0, 0, .28);
+  }
+}

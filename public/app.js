@@ -1,5 +1,5 @@
 import {
-  MONTHS, MON3, DAY3, DATE_RE, ATTENDANCE, TITLES,
+  MON3, DAY3, DATE_RE, ATTENDANCE, TITLES,
   addMonths, monthDiff, monthLong, monthName, monthShort, keyFromDate, isoDate,
   isActive, rotation, roster, cycleKeys, activeIn, recipientOf, paidAmount, isFull, dueDate,
 } from '/logic.js';
@@ -20,8 +20,15 @@ const daysUntil = date => Math.round((date - startOfToday()) / 864e5);
 const fmtDate = d => d.getDate() + ' ' + MON3[d.getMonth()];
 const fmtTs = ts => { const d = new Date(ts); return isNaN(d.getTime()) ? '' : fmtDate(d); };
 const fmtDay = s => { if (!DATE_RE.test(s || '')) return ''; const [y, m, d] = s.split('-').map(Number); return DAY3[new Date(y, m - 1, d).getDay()] + ' ' + d + ' ' + MON3[m - 1]; };
-const fmtR = n => 'R' + String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-const toInt = v => { const n = parseInt(String(v == null ? '' : v).replace(/[^\d]/g, ''), 10); return Number.isFinite(n) ? n : NaN; };
+// Rand with a non-breaking space between thousands (R1 100), so an amount never splits over two lines.
+const fmtR = n => 'R' + String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
+// Reads whole rand from what someone typed: "1 100", "R1,100", "550.00" or "1.100,50".
+// Cents are dropped, so a typed decimal point can never turn R550.00 into R55 000.
+const toInt = v => {
+  const s = String(v == null ? '' : v).replace(/^\s*r/i, '').replace(/\s+/g, '');
+  const m = s.match(/^(\d{1,3}(?:[,.]\d{3})+|\d+)(?:[.,]\d{1,2})?$/);
+  return m ? parseInt(m[1].replace(/[,.]/g, ''), 10) : NaN;
+};
 const firstName = s => String(s).trim().split(/\s+/)[0] || String(s);
 const listJoin = a => a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
 const hash = s => { let h = 7; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) | 0; return Math.abs(h); };
@@ -53,7 +60,11 @@ const ICON = {
   chat: svg('<path d="M4.5 19.5 6 15.6A7.9 7.9 0 1 1 9 18.4z"/>'),
   shuffle: svg('<path d="M16 3.5h4.5V8M3.5 20.5l17-17M20.5 16v4.5H16M14.5 14.5l6 6M3.5 3.5l5 5"/>'),
 };
-const closeBtn = `<button type="button" class="iconbtn" data-act="close" aria-label="Close">${ICON.close}</button>`;
+const closeBtn = `<button type="button" class="icon-btn" data-act="close" aria-label="Close">${ICON.close}</button>`;
+const backLink = () => `<a class="back-btn" href="/" data-act="home">${ICON.left}My stokvels</a>`;
+// A labelled form field. `input` is the control's HTML; `help` is optional small print under it.
+const field = (id, label, input, help) => `<label class="field" for="${id}"><span class="field-label">${label}</span>${input}${help ? `<small>${help}</small>` : ''}</label>`;
+const phoneInput = (id, value) => `<input id="${id}" type="tel" inputmode="tel" autocomplete="tel" placeholder="082 123 4567" value="${esc(value || '')}">`;
 
 /* ---------- state ---------- */
 const S = {
@@ -61,10 +72,10 @@ const S = {
   route: { name: 'boot' },
   list: null, listMonth: null,
   d: null, dId: null, dError: '',
-  invite: null, inviteError: '', joinMode: 'new',
+  invite: null, inviteError: '', joinMode: 'new', joinDraft: { name: null, phone: '' },
   tab: 'month', monthKey: null, recView: 'pay', tone: 'warm',
   pending: 0, justStamped: null,
-  sheet: null, sheetRender: null, lastFocus: null,
+  sheet: null, sheetRender: null, lastFocus: null, lastFocusAt: null,
   reg: null, draw: null, memView: null, memAsk: null, treasAsk: null,
 };
 const store = {
@@ -116,10 +127,11 @@ function parseRoute() {
 function go(path, replace) {
   if (location.pathname !== path) history[replace ? 'replaceState' : 'pushState'](null, '', path);
   closeSheet(true);
+  dismissUndo();
   window.scrollTo(0, 0);
   route();
 }
-window.addEventListener('popstate', () => { closeSheet(true); route(); });
+window.addEventListener('popstate', () => { closeSheet(true); dismissUndo(); route(); });
 
 async function route() {
   S.route = parseRoute();
@@ -167,7 +179,7 @@ async function loadStokvel(id, quiet) {
 }
 
 async function loadInvite(token) {
-  S.invite = null; S.inviteError = '';
+  S.invite = null; S.inviteError = ''; S.joinDraft = { name: null, phone: '' };
   render();
   try { S.invite = await api('GET', 'invites/' + token); }
   catch (e) { S.inviteError = e.message; }
@@ -327,97 +339,99 @@ function describe(a) {
 }
 
 /* ---------- small render pieces ---------- */
-const byHTML = mk => mk && mk.by ? 'by ' + esc(mk.by) : '';
-function stampHTML(kind, top, bottom, seed, extra) {
+function stampHTML(kind, top, bottom, seed, pressed) {
   const rot = (hash(seed) % 9) - 5;
-  return `<span class="stamp ${kind}${extra ? ' ' + extra : ''}" style="--rot:${rot}deg"><b>${top}</b>${bottom ? `<small>${bottom}</small>` : ''}</span>`;
+  return `<span class="stamp ${kind}${pressed ? ' is-pressed' : ''}" style="--rot:${rot}deg"><b>${top}</b>${bottom ? `<small>${bottom}</small>` : ''}</span>`;
 }
-const miniStamp = s => `<span class="ministamp ${s}">${s === 'part' ? 'Part' : s === 'late' ? 'Late' : 'Paid'}</span>`;
+const miniStamp = s => `<span class="mini-stamp ${s}">${s === 'part' ? 'Part' : s === 'late' ? 'Late' : 'Paid'}</span>`;
+const nameTag = (text, accent) => ` <em class="tag${accent ? ' tag--accent' : ''}">${text}</em>`;
 const names = list => list.map(m => esc(m.name)).join(', ');
-const syncHTML = () => `<span class="sync busy" id="sync"${S.pending ? '' : ' hidden'}><i></i>Saving…</span>`;
+const syncHTML = () => `<span class="sync" id="sync"${S.pending ? '' : ' hidden'}><i></i>Saving…</span>`;
 function monthBar(keys, k) {
   const i = keys.indexOf(k), isNow = k === todayKey();
-  return `<div class="monthbar">
-    <button type="button" class="iconbtn" data-act="prev" aria-label="Previous month"${i <= 0 ? ' disabled' : ''}>${ICON.left}</button>
-    <div class="mname"><h2>${monthLong(k)}</h2><p>${isNow ? 'This month · ' + (i + 1) + ' of ' + keys.length : 'Month ' + (i + 1) + ' of ' + keys.length}</p></div>
-    <button type="button" class="iconbtn" data-act="next" aria-label="Next month"${i >= keys.length - 1 ? ' disabled' : ''}>${ICON.right}</button>
+  return `<div class="month-nav">
+    <button type="button" class="icon-btn" data-act="prev" aria-label="Previous month"${i <= 0 ? ' disabled' : ''}>${ICON.left}</button>
+    <div class="month-title"><h2>${monthLong(k)}</h2><p>${isNow ? 'This month · ' + (i + 1) + ' of ' + keys.length : 'Month ' + (i + 1) + ' of ' + keys.length}</p></div>
+    <button type="button" class="icon-btn" data-act="next" aria-label="Next month"${i >= keys.length - 1 ? ' disabled' : ''}>${ICON.right}</button>
   </div>`;
 }
 
 /* ---------- screens: loading, sign-in, invites ---------- */
 function coverHTML(msg) {
-  return `<section class="cover" aria-label="Stokvel"><div class="book"><div class="spine" aria-hidden="true"></div><div class="face">
+  return `<section class="cover" aria-label="Stokvel"><div class="cover-book"><div class="cover-spine" aria-hidden="true"></div><div class="cover-face">
     <h1 class="tape">Stokvel</h1>
     <ul class="cover-list"><li>All your stokvels in one book</li><li>Your treasurer confirms every payment</li><li>See what you’ve paid and the group total</li></ul>
-    <p class="status"><i></i>${esc(msg || 'Opening your book…')}</p></div></div></section>`;
+    <p class="cover-status" role="status"><i></i>${esc(msg || 'Opening your book…')}</p></div></div></section>`;
 }
 function bootErrorHTML() {
-  return `<section class="auth"><div class="authcard"><h1 class="tape">Stokvel</h1><p class="lead">${esc(S.bootError)}</p><button type="button" class="btn primary" data-act="reload">Try again</button></div></section>`;
+  return `<section class="auth"><div class="auth-card"><h1 class="tape">Stokvel</h1><p class="lead">${esc(S.bootError)}</p><button type="button" class="btn btn--primary" data-act="reload">Try again</button></div></section>`;
 }
 function noDbHTML() {
-  return `<section class="auth"><div class="authcard">
+  return `<section class="auth"><div class="auth-card">
     <h1 class="tape">Almost ready</h1>
     <p class="lead">The app is live, but its database isn’t connected yet.</p>
     <ol class="steps"><li>Open the <b>stockvel</b> project in Vercel.</li><li>Go to <b>Storage</b>, then <b>Create Database</b>, then <b>Neon</b>.</li><li>Connect it to the project, then <b>Redeploy</b>.</li></ol>
-    <button type="button" class="btn primary" data-act="reload">Check again</button>
+    <button type="button" class="btn btn--primary" data-act="reload">Check again</button>
   </div></section>`;
 }
 function setupHTML() {
   if (!S.session.setupAllowed) {
-    return `<section class="auth"><div class="authcard"><h1 class="tape">Set up Stokvel</h1><p class="lead">Setup is switched off. Add a <b>SETUP_CODE</b> environment variable to the project in Vercel, redeploy, then come back here.</p></div></section>`;
+    return `<section class="auth"><div class="auth-card"><h1 class="tape">Set up Stokvel</h1><p class="lead">Setup is switched off. Add a <b>SETUP_CODE</b> environment variable to the project in Vercel, redeploy, then come back here.</p></div></section>`;
   }
-  return `<section class="auth"><form class="authcard form" id="setupForm" novalidate>
+  return `<section class="auth"><form class="auth-card form" id="setupForm" novalidate>
     <h1 class="tape">Set up Stokvel</h1>
     <p class="lead">Create the first account. You need the setup code that came with the app.</p>
-    <label class="field" for="suCode"><span class="lab">Setup code</span><input id="suCode" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX"></label>
-    <label class="field" for="suName"><span class="lab">Your name</span><input id="suName" autocomplete="name" maxlength="60"></label>
-    <label class="field" for="suPhone"><span class="lab">Phone number</span><input id="suPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="082 123 4567"></label>
-    <label class="field" for="suPass"><span class="lab">Password</span><input id="suPass" type="password" autocomplete="new-password"><small>At least 6 characters.</small></label>
-    <p class="formerr" id="formErr" role="alert" hidden></p>
-    <button type="submit" class="btn primary" id="formSubmit">Create my account</button>
+    ${field('suCode', 'Setup code', '<input id="suCode" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX">')}
+    ${field('suName', 'Your name', '<input id="suName" autocomplete="name" maxlength="60">')}
+    ${field('suPhone', 'Phone number', phoneInput('suPhone'))}
+    ${field('suPass', 'Password', '<input id="suPass" type="password" autocomplete="new-password">', 'At least 6 characters.')}
+    <p class="form-error" id="formErr" role="alert" hidden></p>
+    <button type="submit" class="btn btn--primary" id="formSubmit">Create my account</button>
   </form></section>`;
 }
 function loginHTML() {
-  return `<section class="auth"><form class="authcard form" id="loginForm" novalidate>
+  return `<section class="auth"><form class="auth-card form" id="loginForm" novalidate>
     <h1 class="tape">Stokvel</h1>
     <p class="lead">Log in with your phone number to see your stokvels.</p>
-    <label class="field" for="liPhone"><span class="lab">Phone number</span><input id="liPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="082 123 4567"></label>
-    <label class="field" for="liPass"><span class="lab">Password</span><input id="liPass" type="password" autocomplete="current-password"></label>
-    <p class="formerr" id="formErr" role="alert" hidden></p>
-    <button type="submit" class="btn primary" id="formSubmit">Log in</button>
-  </form><p class="foot">New here? Ask your treasurer to send you an invite link.</p></section>`;
+    ${field('liPhone', 'Phone number', phoneInput('liPhone'))}
+    ${field('liPass', 'Password', '<input id="liPass" type="password" autocomplete="current-password">')}
+    <p class="form-error" id="formErr" role="alert" hidden></p>
+    <button type="submit" class="btn btn--primary" id="formSubmit">Log in</button>
+  </form><p class="auth-foot">New here? Ask your treasurer to send you an invite link.</p></section>`;
 }
 function joinHTML() {
   const user = S.session.user;
   if (S.inviteError) {
-    return `<section class="auth"><div class="authcard"><p class="label">Invite link</p><h1 class="tape">Stokvel</h1><p class="lead">${esc(S.inviteError)}</p>
-      <button type="button" class="btn primary" data-act="home">${user ? 'Go to my stokvels' : 'Log in'}</button></div></section>`;
+    return `<section class="auth"><div class="auth-card"><p class="label">Invite link</p><h1 class="tape">Stokvel</h1><p class="lead">${esc(S.inviteError)}</p>
+      <a class="btn btn--primary" href="/" data-act="home">${user ? 'Go to my stokvels' : 'Log in'}</a></div></section>`;
   }
   if (!S.invite) return coverHTML('Opening your invite…');
-  const inv = S.invite, m = inv.member;
+  const inv = S.invite, m = inv.member, draft = S.joinDraft;
   const role = m.isTreasurer ? ', the treasurer. You’ll confirm everyone’s payments.' : '';
   let body;
   if (user && inv.alreadyIn) {
-    body = `<p class="lead">You’re already in this stokvel as <b>${esc(stop(inv.alreadyIn))}</b></p><button type="button" class="btn primary" data-act="openStokvel" data-id="${esc(inv.stokvel.id)}">Open ${esc(inv.stokvel.name)}</button>`;
+    body = `<p class="lead">You’re already in this stokvel as <b>${esc(stop(inv.alreadyIn))}</b></p><a class="btn btn--primary" href="/s/${esc(inv.stokvel.id)}" data-act="openStokvel" data-id="${esc(inv.stokvel.id)}">Open ${esc(inv.stokvel.name)}</a>
+      <button type="button" class="link-btn" data-act="logout">Not you? Log out</button>`;
   } else if (user) {
     body = `<p class="fineprint">You’re logged in as ${esc(user.name)} (${esc(user.phone)}).</p>
-      <p class="formerr" id="formErr" role="alert" hidden></p>
-      <button type="button" class="btn primary" data-act="joinAccept" id="formSubmit">Join as ${esc(m.name)}</button>`;
+      <p class="form-error" id="formErr" role="alert" hidden></p>
+      <button type="button" class="btn btn--primary" data-act="joinAccept" id="formSubmit">Join as ${esc(m.name)}</button>
+      <button type="button" class="link-btn" data-act="logout">Not you? Log out</button>`;
   } else {
     const isNew = S.joinMode === 'new';
-    body = `<div class="seg two" role="tablist" aria-label="Account">
-        <button type="button" role="tab" aria-selected="${isNew}" data-act="joinMode" data-mode="new">I’m new here</button>
-        <button type="button" role="tab" aria-selected="${!isNew}" data-act="joinMode" data-mode="login">I have an account</button>
+    body = `<div class="segmented" role="group" aria-label="Account">
+        <button type="button" aria-pressed="${isNew}" data-act="joinMode" data-mode="new">I’m new here</button>
+        <button type="button" aria-pressed="${!isNew}" data-act="joinMode" data-mode="login">I have an account</button>
       </div>
       <form class="form" id="joinForm" novalidate>
-        ${isNew ? `<label class="field" for="jnName"><span class="lab">Your name</span><input id="jnName" autocomplete="name" maxlength="60" value="${esc(m.name)}"></label>` : ''}
-        <label class="field" for="jnPhone"><span class="lab">Phone number</span><input id="jnPhone" type="tel" inputmode="tel" autocomplete="tel" placeholder="082 123 4567"></label>
-        <label class="field" for="jnPass"><span class="lab">${isNew ? 'Choose a password' : 'Password'}</span><input id="jnPass" type="password" autocomplete="${isNew ? 'new-password' : 'current-password'}">${isNew ? '<small>At least 6 characters. You’ll log in with your phone number and this password.</small>' : ''}</label>
-        <p class="formerr" id="formErr" role="alert" hidden></p>
-        <button type="submit" class="btn primary" id="formSubmit">${isNew ? 'Create my login and join' : 'Log in and join'}</button>
+        ${isNew ? field('jnName', 'Your name', `<input id="jnName" autocomplete="name" maxlength="60" value="${esc(draft.name == null ? m.name : draft.name)}">`) : ''}
+        ${field('jnPhone', 'Phone number', phoneInput('jnPhone', draft.phone))}
+        ${field('jnPass', isNew ? 'Choose a password' : 'Password', `<input id="jnPass" type="password" autocomplete="${isNew ? 'new-password' : 'current-password'}">`, isNew ? 'At least 6 characters. You’ll log in with your phone number and this password.' : '')}
+        <p class="form-error" id="formErr" role="alert" hidden></p>
+        <button type="submit" class="btn btn--primary" id="formSubmit">${isNew ? 'Create my login and join' : 'Log in and join'}</button>
       </form>`;
   }
-  return `<section class="auth"><div class="authcard">
+  return `<section class="auth"><div class="auth-card">
     <p class="label">You’re invited${inv.invitedBy ? ' by ' + esc(inv.invitedBy) : ''}</p>
     <h1 class="tape">${esc(inv.stokvel.name)}</h1>
     <p class="lead">Join as <b>${esc(role ? m.name : stop(m.name))}</b>${role}</p>
@@ -428,14 +442,14 @@ function joinHTML() {
 /* ---------- screens: home ---------- */
 function homeHTML() {
   const u = S.session.user, list = S.list;
-  const top = `<header class="brandrow"><span class="appname">Stokvel</span><span class="tools"><button type="button" class="iconbtn" data-act="account" aria-label="Your account">${ICON.user}</button></span></header>`;
+  const top = `<header class="topbar"><span class="app-name">Stokvel</span><span class="topbar-actions"><button type="button" class="icon-btn" data-act="account" aria-label="Your account">${ICON.user}</button></span></header>`;
   const count = list ? list.length : 0;
-  const hello = `<div class="hello"><h1>Hi ${esc(firstName(u.name))}</h1><p>${!list ? 'Loading your stokvels…' : count ? (count === 1 ? 'Your stokvel' : 'Your ' + count + ' stokvels') : 'Welcome to your stokvel book.'}</p></div>`;
+  const hello = `<div class="greeting"><h1>Hi ${esc(firstName(u.name))}</h1><p>${!list ? 'Loading your stokvels…' : count ? (count === 1 ? 'Your stokvel' : 'Your ' + count + ' stokvels') : 'Welcome to your stokvel book.'}</p></div>`;
   if (!list) return top + hello;
   if (!count) {
-    return top + hello + `<section class="card"><div class="cardhead"><h2>You’re not in a stokvel yet</h2><p>Start one and invite your members. If a treasurer sent you an invite link, open that link instead.</p></div><button type="button" class="btn primary" data-act="create">${ICON.plus}Start a stokvel</button></section>`;
+    return top + hello + `<section class="card"><div class="card-head"><h2>You’re not in a stokvel yet</h2><p>Start one and invite your members. If a treasurer sent you an invite link, open that link instead.</p></div><button type="button" class="btn btn--primary" data-act="create">${ICON.plus}Start a stokvel</button></section>`;
   }
-  return top + hello + `<div class="stoklist">${list.map(cardHTML).join('')}</div><button type="button" class="btn ghost" data-act="create">${ICON.plus}Start another stokvel</button>`;
+  return top + hello + `<div class="stokvel-list">${list.map(cardHTML).join('')}</div><button type="button" class="btn btn--ghost" data-act="create">${ICON.plus}Start another stokvel</button>`;
 }
 function cardHTML(s) {
   const mon = monthName(S.listMonth || todayKey());
@@ -443,30 +457,36 @@ function cardHTML(s) {
   const isT = s.role === 'treasurer';
   let first;
   if (isT) first = `<div><span>${mon}</span><b>${s.monthPaid} of ${s.activeCount}</b><span>confirmed</span></div>`;
-  else if (s.myStatus) first = `<div><span>You’ve paid</span><b>${fmtR(s.myTotal)}</b><span class="good">${mon}: confirmed${s.myStatus === 'late' ? ' (late)' : s.myStatus === 'part' ? ' (part)' : ''}</span></div>`;
+  else if (s.myStatus) first = `<div><span>You’ve paid</span><b>${fmtR(s.myTotal)}</b><span class="text-good">${mon}: confirmed${s.myStatus === 'late' ? ' (late)' : s.myStatus === 'part' ? ' (part)' : ''}</span></div>`;
   else first = `<div><span>You’ve paid</span><b>${fmtR(s.myTotal)}</b><span>${mon}: not confirmed yet</span></div>`;
-  const waiting = !s.treasurerJoined && s.treasurerName ? `<p class="sub warn">Waiting for ${esc(s.treasurerName)} to join as treasurer.</p>` : '';
-  return `<button type="button" class="stokcard" data-act="openStokvel" data-id="${esc(s.id)}">
+  const waiting = !s.treasurerJoined && s.treasurerName ? `<p class="sub text-warn">Waiting for ${esc(s.treasurerName)} to join as treasurer.</p>` : '';
+  return `<a class="stokvel-card" href="/s/${esc(s.id)}" data-act="openStokvel" data-id="${esc(s.id)}">
     <span class="tape">${esc(s.name)}</span>
-    <span class="row2">${isT ? '<span class="chip t">Treasurer</span>' : '<span class="chip">Member</span>'}<span class="sub">${kind} · ${fmtR(s.amount)} a month</span></span>
-    <span class="facts">${first}<div><span>Everyone together</span><b>${fmtR(s.totalCollected)}</b><span>${s.monthCollected ? fmtR(s.monthCollected) + ' this month' : 'collected so far'}</span></div></span>
+    <div class="tags">${isT ? '<span class="chip chip--accent">Treasurer</span>' : '<span class="chip">Member</span>'}<span class="sub">${kind} · ${fmtR(s.amount)} a month</span></div>
+    <div class="facts">${first}<div><span>Everyone together</span><b>${fmtR(s.totalCollected)}</b><span>${s.monthCollected ? fmtR(s.monthCollected) + ' this month' : 'collected so far'}</span></div></div>
     ${waiting}
-    <span class="go">${ICON.right}</span>
-  </button>`;
+    <span class="chev" aria-hidden="true">${ICON.right}</span>
+  </a>`;
 }
 
 /* ---------- screens: a stokvel ---------- */
 function stokHeader(d) {
   const st = d.st, n = activeIn(st, d.members, selKey(d)).length;
   const kind = st.kind === 'rotating' ? 'Rotating payout' : 'Group fund';
-  const tools = d.canManage ? `<span class="tools"><button type="button" class="iconbtn" data-act="members" aria-label="Members">${ICON.people}</button><button type="button" class="iconbtn" data-act="settings" aria-label="Stokvel settings">${ICON.sliders}</button></span>` : '';
-  const who = d.role !== 'treasurer' && d.treasurer ? `<p class="whoconfirms">${esc(d.treasurer.name)} is the treasurer and confirms payments.</p>` : '';
-  return `<header class="top">
-    <div class="brandrow"><button type="button" class="back" data-act="home">${ICON.left}My stokvels</button>${syncHTML()}${tools}</div>
+  const tools = d.canManage ? `<span class="topbar-actions"><button type="button" class="icon-btn" data-act="members" aria-label="Members">${ICON.people}</button><button type="button" class="icon-btn" data-act="settings" aria-label="Stokvel settings">${ICON.sliders}</button></span>` : '';
+  const who = d.role !== 'treasurer' && d.treasurer ? `<p class="page-sub">${esc(d.treasurer.name)} is the treasurer and confirms payments.</p>` : '';
+  return `<header class="page-head">
+    <div class="topbar">${backLink()}${syncHTML()}${tools}</div>
     <h1 class="tape">${esc(st.name)}</h1>
-    <p class="meta"><span>${kind} · ${fmtR(st.amount)} a month · ${n} ${n === 1 ? 'member' : 'members'}</span>${d.role === 'treasurer' ? '<span class="chip t">Treasurer</span>' : '<span class="chip">Member</span>'}</p>
+    <p class="page-meta"><span>${kind} · ${fmtR(st.amount)} a month · ${n} ${n === 1 ? 'member' : 'members'}</span>${d.role === 'treasurer' ? '<span class="chip chip--accent">Treasurer</span>' : '<span class="chip">Member</span>'}</p>
     ${who}
   </header>`;
+}
+// While a stokvel loads: its header (the name is known from the home list) and a quiet status line.
+function stokLoadingHTML() {
+  const known = S.list && S.list.find(s => s.id === S.dId);
+  return `<header class="page-head"><div class="topbar">${backLink()}</div><h1 class="tape">${esc(known ? known.name : 'Stokvel')}</h1></header>
+    <p class="loading" role="status"><i></i>Opening the book…</p>`;
 }
 
 function rowHTML(d, k, m, idx, recId) {
@@ -474,34 +494,34 @@ function rowHTML(d, k, m, idx, recId) {
   const isRec = recId === m.id, isT = m.id === st.treasurerId;
   const prevOwed = balance(d, m.id, k).owed;
   const bits = [];
-  if (isRec) bits.push('<span class="gets">Gets the pot</span>');
+  if (isRec) bits.push('<span class="text-accent">Gets the pot</span>');
   if (mk) {
     bits.push(mk.status === 'paid' ? 'Confirmed ' + fmtTs(mk.at) : mk.status === 'late' ? 'Paid late · confirmed ' + fmtTs(mk.at) : 'Paid ' + fmtR(paidAmount(st, mk)) + ' of ' + fmtR(st.amount));
-  } else if (cs === 'missed') bits.push('<span class="bad">Overdue since ' + fmtDate(due) + '</span>');
+  } else if (cs === 'missed') bits.push('<span class="text-bad">Overdue since ' + fmtDate(due) + '</span>');
   else bits.push('Due ' + fmtDate(due));
-  if (at === 'absent') bits.push('<span class="bad">missed the meeting</span>');
-  if (at === 'apology') bits.push('<span class="warn">apology for the meeting</span>');
-  if (prevOwed > 0) bits.push('<span class="bad">behind ' + fmtR(prevOwed) + '</span>');
-  const tag = isT ? ' <em class="t">Treasurer</em>' : m.title ? ' <em>' + esc(m.title) + '</em>' : '';
+  if (at === 'absent') bits.push('<span class="text-bad">missed the meeting</span>');
+  if (at === 'apology') bits.push('<span class="text-warn">apology for the meeting</span>');
+  if (prevOwed > 0) bits.push('<span class="text-bad">behind ' + fmtR(prevOwed) + '</span>');
+  const tag = isT ? nameTag('Treasurer', true) : m.title ? nameTag(esc(m.title)) : '';
   const who = `<span class="name">${esc(m.name)}${tag}</span><span class="sub">${bits.join(' · ')}</span>`;
-  let right;
+  let end;
   if (mk) {
     const top = mk.status === 'part' ? 'Part' : mk.status === 'late' ? 'Late' : 'Paid';
     const bottom = mk.status === 'part' ? fmtR(paidAmount(st, mk)) : mk.status === 'late' ? (st.lateFine ? '+' + fmtR(st.lateFine) : fmtTs(mk.at)) : fmtTs(mk.at);
-    const stamp = stampHTML(mk.status, top, bottom, m.id + k, S.justStamped === k + ':' + m.id ? 'press' : '');
-    right = `<button type="button" class="stampwrap" data-act="mark" data-id="${esc(m.id)}" aria-label="Change ${esc(m.name)}’s payment">${stamp}</button>`;
+    const stamp = stampHTML(mk.status, top, bottom, m.id + k, S.justStamped === k + ':' + m.id);
+    end = `<button type="button" class="stamp-btn" data-act="mark" data-id="${esc(m.id)}" aria-label="Change ${esc(m.name)}’s payment">${stamp}</button>`;
   } else {
-    right = `<button type="button" class="stampbtn" data-act="quick" data-id="${esc(m.id)}" aria-label="Confirm ${esc(m.name)} paid">Confirm</button>`;
+    end = `<button type="button" class="confirm-btn" data-act="quick" data-id="${esc(m.id)}" aria-label="Confirm ${esc(m.name)} paid">Confirm</button>`;
   }
-  const dot = at ? `<i class="attdot ${at}" title="Meeting: ${ATT_LABEL[at]}"></i>` : '';
-  return `<li class="row${isRec ? ' rec' : ''}"><span class="no">${idx + 1}${dot}</span><button type="button" class="rowmain" data-act="mark" data-id="${esc(m.id)}">${who}</button><div class="right">${right}</div></li>`;
+  const dot = at ? `<i class="att-dot ${at}" role="img" aria-label="Meeting: ${ATT_LABEL[at]}" title="Meeting: ${ATT_LABEL[at]}"></i>` : '';
+  return `<li class="ledger-row${isRec ? ' is-recipient' : ''}"><span class="row-num">${idx + 1}${dot}</span><button type="button" class="row-main" data-act="mark" data-id="${esc(m.id)}">${who}</button><div class="row-end">${end}</div></li>`;
 }
 
 function monthView(d) {
   const st = d.st, keys = cycleKeys(st, d.members), k = selKey(d), s = monthStats(d, k), act = activeIn(st, d.members, k), ms = meetStats(d, k);
   const side = st.kind === 'rotating'
-    ? `<p class="label">Payout · ${fmtDate(s.due)}</p><p class="who">${s.recipient ? esc(s.recipient.name) : '—'}</p><p class="when">${relDays(daysUntil(s.due))}</p>`
-    : `<p class="label">Due · ${fmtDate(s.due)}</p><p class="who">${fmtR(groupTotals(d).collected)}</p><p class="when">in the fund so far</p>`;
+    ? `<p class="label">Payout · ${fmtDate(s.due)}</p><p class="summary-who">${s.recipient ? esc(s.recipient.name) : '—'}</p><p class="summary-when">${relDays(daysUntil(s.due))}</p>`
+    : `<p class="label">Due · ${fmtDate(s.due)}</p><p class="summary-who">${fmtR(groupTotals(d).collected)}</p><p class="summary-when">in the fund so far</p>`;
   const n = Math.max(1, act.length), gap = act.length > 20 ? 2 : 4;
   const payTally = act.map(m => {
     const mk = markOf(d, k, m.id);
@@ -518,10 +538,10 @@ function monthView(d) {
       if (ms.apology.length) line.push(ms.apology.length + (ms.apology.length === 1 ? ' apology' : ' apologies'));
       if (ms.absent.length) line.push(ms.absent.length + ' absent');
       if (ms.unmarked.length) line.push(ms.unmarked.length + ' not marked');
-      meet = `<hr class="split"><div class="meetrow"><div><p class="label">Meeting · ${fmtDay(ms.date)}</p><p class="meetline">${line.join(' · ')}</p></div><button type="button" class="btn sm" data-act="register">${ICON.register}Edit register</button></div>
-        <div class="tally meet" style="--n:${n};--g:${gap}px" role="img" aria-label="${ms.present.length} of ${ms.count} members at the meeting">${act.map(m => `<i class="${attOf(d, k, m.id) || ''}"></i>`).join('')}</div>`;
+      meet = `<hr class="divider"><div class="info-row"><div><p class="label">Meeting · ${fmtDay(ms.date)}</p><p class="info-value">${line.join(' · ')}</p></div><button type="button" class="btn btn--sm" data-act="register">${ICON.register}Edit register</button></div>
+        <div class="tally tally--meet" style="--n:${n};--g:${gap}px" role="img" aria-label="${ms.present.length} of ${ms.count} members at the meeting">${act.map(m => `<i class="${attOf(d, k, m.id) || ''}"></i>`).join('')}</div>`;
     } else {
-      meet = `<hr class="split"><div class="meetrow"><div><p class="label">Meeting</p><p class="meetline">Register not taken yet</p></div><button type="button" class="btn sm primary" data-act="register">${ICON.register}Take the register</button></div>`;
+      meet = `<hr class="divider"><div class="info-row"><div><p class="label">Meeting</p><p class="info-value">Register not taken yet</p></div><button type="button" class="btn btn--sm btn--primary" data-act="register">${ICON.register}Take the register</button></div>`;
     }
   }
   const owe = outstanding(d, k), overdue = isDue(st, k);
@@ -531,60 +551,60 @@ function monthView(d) {
     let t = 'Register not taken yet.';
     if (ms) {
       const bits = [];
-      if (ms.absent.length) bits.push('<span class="bad">' + names(ms.absent) + '</span>');
-      if (ms.apology.length) bits.push('<span class="warn">apology from ' + names(ms.apology) + '</span>');
+      if (ms.absent.length) bits.push('<span class="text-bad">' + names(ms.absent) + '</span>');
+      if (ms.apology.length) bits.push('<span class="text-warn">apology from ' + names(ms.apology) + '</span>');
       if (ms.unmarked.length) bits.push('not marked: ' + names(ms.unmarked));
       t = bits.length ? bits.join(' · ') : 'Everyone was there.';
     }
-    meetCheck = `<div><dt>Missed meeting</dt><dd>${t}</dd></div>`;
+    meetCheck = `<div><dt class="label">Missed meeting</dt><dd>${t}</dd></div>`;
   }
   const recId = s.recipient ? s.recipient.id : '';
   return `${monthBar(keys, k)}
   <section class="card" aria-label="Month summary">
-    <div class="sum-grid">
-      <div class="sum-main"><p class="label">Collected</p><p class="amount"><span class="big">${fmtR(s.collected)}</span><span class="of">of ${fmtR(s.target)}</span></p></div>
-      <div class="sum-side">${side}</div>
+    <div class="summary">
+      <div class="stat"><p class="label">Collected</p><p class="total"><span class="total-value">${fmtR(s.collected)}</span><span class="total-of">of ${fmtR(s.target)}</span></p></div>
+      <div class="summary-side">${side}</div>
     </div>
     <div class="tally" style="--n:${n};--g:${gap}px" role="img" aria-label="${s.paid} of ${s.count} members confirmed">${payTally}</div>
-    <p class="sum-foot">${foot.join(' · ')}</p>
+    <p class="card-note">${foot.join(' · ')}</p>
     ${meet}
-    <hr class="split">
-    <dl class="check">
-      <div><dt>${overdue && owe.length ? 'Owing' : 'Not paid yet'}</dt><dd${overdue && owe.length ? ' class="bad"' : ''}>${oweText}</dd></div>
+    <hr class="divider">
+    <dl class="check-list">
+      <div><dt class="label">${overdue && owe.length ? 'Owing' : 'Not paid yet'}</dt><dd${overdue && owe.length ? ' class="text-bad"' : ''}>${oweText}</dd></div>
       ${meetCheck}
     </dl>
   </section>
   ${act.length ? `<ol class="ledger" aria-label="Members">${act.map((m, i) => rowHTML(d, k, m, i, recId)).join('')}</ol>` : '<section class="card"><p class="empty">No members in this month yet.</p></section>'}
-  <div class="ledger-foot"><button type="button" class="btn ghost sm" data-act="members">${ICON.people}Add or remove members</button></div>
+  <div class="ledger-foot"><button type="button" class="btn btn--ghost btn--sm" data-act="members">${ICON.people}Add or remove members</button></div>
   <p class="hint">Tap a name to record a late or part payment${st.meetings ? ', mark the meeting,' : ''} or clear a confirmation.</p>`;
 }
 
 function movesHTML(m, i, ci, n) {
   const first = Math.max(0, ci + 1);
-  return `<span class="moves"><button type="button" class="iconbtn sm" data-act="up" data-id="${esc(m.id)}" aria-label="Move ${esc(m.name)} earlier"${i <= first ? ' disabled' : ''}>${ICON.up}</button><button type="button" class="iconbtn sm" data-act="down" data-id="${esc(m.id)}" aria-label="Move ${esc(m.name)} later"${i >= n - 1 ? ' disabled' : ''}>${ICON.down}</button></span>`;
+  return `<span class="move-btns"><button type="button" class="icon-btn icon-btn--sm" data-act="up" data-id="${esc(m.id)}" aria-label="Move ${esc(m.name)} earlier"${i <= first ? ' disabled' : ''}>${ICON.up}</button><button type="button" class="icon-btn icon-btn--sm" data-act="down" data-id="${esc(m.id)}" aria-label="Move ${esc(m.name)} later"${i >= n - 1 ? ' disabled' : ''}>${ICON.down}</button></span>`;
 }
 function turnsView(d) {
   const st = d.st, r = rotation(st, d.members), keys = cycleKeys(st, d.members), ci = monthDiff(st.startMonth, todayKey());
   const upcoming = r.length - Math.min(r.length, Math.max(0, ci + 1));
   const rows = r.map((m, i) => {
-    const k = keys[i], s = monthStats(d, k), po = payoutOf(d, k), p = { y: k.slice(0, 4) };
+    const k = keys[i], s = monthStats(d, k), po = payoutOf(d, k);
     const state = i < ci ? 'past' : i === ci ? 'now' : 'future';
-    let sub, right = '';
+    let sub, end = '';
     if (po) {
       sub = 'Received ' + fmtR(s.collected) + (po.by ? ' · stamped by ' + esc(po.by) : '');
-      right = `<button type="button" class="stampwrap" data-act="payoutSheet" data-k="${k}" aria-label="Change the paid-out stamp for ${monthLong(k)}">${stampHTML('done', 'Paid out', fmtTs(po.at), 'po' + k, S.justStamped === 'po:' + k ? 'press' : '')}</button>`;
+      end = `<button type="button" class="stamp-btn" data-act="payoutSheet" data-k="${k}" aria-label="Change the paid-out stamp for ${monthLong(k)}">${stampHTML('done', 'Paid out', fmtTs(po.at), 'po' + k, S.justStamped === 'po:' + k)}</button>`;
     } else if (state === 'future') {
       sub = 'Gets ' + fmtR(s.target) + ' on ' + fmtDate(s.due);
-      right = movesHTML(m, i, ci, r.length);
+      end = movesHTML(m, i, ci, r.length);
     } else {
       sub = fmtR(s.collected) + ' of ' + fmtR(s.target) + ' collected · payout ' + fmtDate(s.due);
-      right = `<button type="button" class="stampbtn" data-act="payout" data-k="${k}">Mark paid out</button>`;
+      end = `<button type="button" class="confirm-btn" data-act="payout" data-k="${k}">Mark paid out</button>`;
     }
-    const tag = state === 'now' ? ' <em class="now">This month</em>' : m.left ? ' <em>Left</em>' : '';
-    return `<li class="row turn ${state}"><span class="no"><b>${monthShort(k)}</b><small>${p.y}</small></span><div class="rowmain"><span class="name">${esc(m.name)}${tag}</span><span class="sub">${sub}</span></div><div class="right">${right}</div></li>`;
+    const tag = state === 'now' ? nameTag('This month', true) : m.left ? nameTag('Left') : '';
+    return `<li class="ledger-row is-${state}"><span class="row-num"><b>${monthShort(k)}</b><small>${k.slice(0, 4)}</small></span><div class="row-main"><span class="name">${esc(m.name)}${tag}</span><span class="sub">${sub}</span></div><div class="row-end">${end}</div></li>`;
   }).join('');
-  return `<section class="sechead"><div><h2>Payout order</h2><p>Each month one member takes the whole pot.</p></div><button type="button" class="btn sm" data-act="draw"${upcoming < 2 ? ' disabled' : ''}>${ICON.shuffle}Draw lots</button></section>
-  <ol class="ledger turns" aria-label="Payout order">${rows}</ol>
+  return `<section class="section-head"><div><h2>Payout order</h2><p>Each month one member takes the whole pot.</p></div><button type="button" class="btn btn--sm" data-act="draw"${upcoming < 2 ? ' disabled' : ''}>${ICON.shuffle}Draw lots</button></section>
+  <ol class="ledger" aria-label="Payout order">${rows}</ol>
   <p class="hint">Past and current turns stay where they are. Move or draw lots for the turns still to come.</p>`;
 }
 function fundView(d) {
@@ -597,16 +617,16 @@ function fundView(d) {
     for (const k of keys) if (isActive(m, k) && !isDue(st, k)) proj += st.amount - paidAmount(st, markOf(d, k, m.id));
     fund += x.paid; projected += proj; fines += x.fines;
     const sub = ['Paid in ' + fmtR(x.paid)];
-    if (x.owed) sub.push('<span class="bad">owes ' + fmtR(x.owed) + '</span>');
+    if (x.owed) sub.push('<span class="text-bad">owes ' + fmtR(x.owed) + '</span>');
     if (x.fines) sub.push('fines ' + fmtR(x.fines));
-    return `<li class="row"><span class="no">${i + 1}</span><div class="rowmain"><span class="name">${esc(m.name)}${m.left ? ' <em>Left</em>' : ''}</span><span class="sub">${sub.join(' · ')}</span></div><div class="right"><span class="amt">${fmtR(proj)}</span></div></li>`;
+    return `<li class="ledger-row"><span class="row-num">${i + 1}</span><div class="row-main"><span class="name">${esc(m.name)}${m.left ? nameTag('Left') : ''}</span><span class="sub">${sub.join(' · ')}</span></div><div class="row-end"><span class="amt">${fmtR(proj)}</span></div></li>`;
   }).join('');
   let action = '';
-  if (po) action = `<button type="button" class="stampwrap" data-act="payoutSheet" data-k="${last}" aria-label="Change the paid-out stamp">${stampHTML('done', 'Paid out', fmtTs(po.at), 'po' + last, S.justStamped === 'po:' + last ? 'press' : '')}</button>`;
-  else if (started) action = `<button type="button" class="btn sm" data-act="payout" data-k="${last}">Mark fund paid out</button>`;
-  return `<section class="sechead"><div><h2>The fund</h2><p>Everyone pays in until ${monthLong(last)}.</p></div>${action}</section>
-  <section class="card stats" aria-label="Fund"><div><p class="label">In the fund</p><p class="num">${fmtR(fund)}</p></div><div><p class="label">By ${monthShort(last)} ${last.slice(0, 4)}</p><p class="num">${fmtR(projected)}</p></div><div><p class="label">Fines</p><p class="num">${fmtR(fines)}</p></div></section>
-  <ol class="ledger" aria-label="Each member’s share"><li class="row head"><span class="no"></span><span class="label">Member</span><span class="label">By the end</span></li>${rows}</ol>
+  if (po) action = `<button type="button" class="stamp-btn" data-act="payoutSheet" data-k="${last}" aria-label="Change the paid-out stamp">${stampHTML('done', 'Paid out', fmtTs(po.at), 'po' + last, S.justStamped === 'po:' + last)}</button>`;
+  else if (started) action = `<button type="button" class="btn btn--sm" data-act="payout" data-k="${last}">Mark fund paid out</button>`;
+  return `<section class="section-head"><div><h2>The fund</h2><p>Everyone pays in until ${monthLong(last)}.</p></div>${action}</section>
+  <section class="card stats" aria-label="Fund"><div class="stat"><p class="label">In the fund</p><p class="stat-value">${fmtR(fund)}</p></div><div class="stat"><p class="label">By ${monthShort(last)} ${last.slice(0, 4)}</p><p class="stat-value">${fmtR(projected)}</p></div><div class="stat"><p class="label">Fines</p><p class="stat-value">${fmtR(fines)}</p></div></section>
+  <ol class="ledger" aria-label="Each member’s share"><li class="ledger-row ledger-row--head" aria-hidden="true"><span class="row-num"></span><span class="label">Member</span><span class="label">By the end</span></li>${rows}</ol>
   <p class="hint">“By the end” assumes everyone pays the months still to come. Arrears are not included.</p>`;
 }
 function recordView(d) {
@@ -618,34 +638,34 @@ function recordView(d) {
     if (a) return a;
     return monthDiff(tk, k) > 0 ? 'future' : 'nomeet';
   };
-  const head = keys.map(k => `<th scope="col"${k === tk ? ' class="now"' : ''}><button type="button" data-act="goto" data-k="${k}" aria-label="Open ${monthLong(k)}" title="${monthLong(k)}">${monthName(k)[0]}</button></th>`).join('');
-  const body = list.map(m => `<tr><th scope="row"><span>${esc(m.name)}</span></th>${keys.map(k => { const s = cellFor(k, m); return `<td${k === tk ? ' class="now"' : ''}><i class="c ${s}" title="${esc(monthLong(k) + ': ' + CELL[s])}"></i></td>`; }).join('')}</tr>`).join('');
+  const head = keys.map(k => `<th scope="col"${k === tk ? ' class="is-now"' : ''}><button type="button" data-act="goto" data-k="${k}" aria-label="Open ${monthLong(k)}" title="${monthLong(k)}">${monthName(k)[0]}</button></th>`).join('');
+  const body = list.map(m => `<tr><th scope="row"><span>${esc(m.name)}</span></th>${keys.map(k => { const s = cellFor(k, m), what = esc(monthLong(k) + ': ' + CELL[s]); return `<td${k === tk ? ' class="is-now"' : ''}><i class="cell ${s}" role="img" aria-label="${what}" title="${what}"></i></td>`; }).join('')}</tr>`).join('');
   const legend = (meet ? ['present', 'apology', 'absent', 'nomeet', 'future'] : ['paid', 'late', 'part', 'missed', 'open', 'future']).concat(list.some(m => m.joined || m.left) ? ['na'] : []);
   const rows = list.map(m => ({ m, x: balance(d, m.id) }));
   const behind = rows.filter(r => r.x.owed > 0).sort((a, z) => z.x.owed - a.x.owed);
   const absent = rows.filter(r => r.x.absentKeys.length > 0).sort((a, z) => z.x.absentKeys.length - a.x.absentKeys.length);
   return `<section class="card stats" aria-label="Totals">
-    <div><p class="label">Collected</p><p class="num">${fmtR(t.collected)}</p></div>
-    <div><p class="label">Behind</p><p class="num${t.behind ? ' bad' : ''}">${fmtR(t.behind)}</p></div>
-    <div><p class="label">Fines</p><p class="num">${fmtR(t.fines)}</p></div>
+    <div class="stat"><p class="label">Collected</p><p class="stat-value">${fmtR(t.collected)}</p></div>
+    <div class="stat"><p class="label">Behind</p><p class="stat-value${t.behind ? ' text-bad' : ''}">${fmtR(t.behind)}</p></div>
+    <div class="stat"><p class="label">Fines</p><p class="stat-value">${fmtR(t.fines)}</p></div>
   </section>
   <section class="card">
-    <div class="cardhead"><h2>${st.kind === 'rotating' ? 'The full cycle' : 'The year so far'}</h2><p>${monthLong(keys[0])} to ${monthLong(keys[keys.length - 1])}. Tap a month to open it.</p></div>
-    ${st.meetings ? `<div class="seg two" role="radiogroup" aria-label="Show"><button type="button" role="radio" aria-checked="${!meet}" data-act="recView" data-v="pay">Payments</button><button type="button" role="radio" aria-checked="${meet}" data-act="recView" data-v="meet">Meetings</button></div>` : ''}
-    <div class="gridscroll"><table class="grid"><thead><tr><th scope="col"><span class="label">Member</span></th>${head}</tr></thead><tbody>${body}</tbody></table></div>
-    <ul class="legend">${legend.map(s => `<li><i class="c ${s}"></i>${CELL[s]}</li>`).join('')}</ul>
+    <div class="card-head"><h2>${st.kind === 'rotating' ? 'The full cycle' : 'The year so far'}</h2><p>${monthLong(keys[0])} to ${monthLong(keys[keys.length - 1])}. Tap a month to open it.</p></div>
+    ${st.meetings ? `<div class="segmented" role="group" aria-label="Show"><button type="button" aria-pressed="${!meet}" data-act="recView" data-v="pay">Payments</button><button type="button" aria-pressed="${meet}" data-act="recView" data-v="meet">Meetings</button></div>` : ''}
+    <div class="grid-scroll"><table class="record-grid"><thead><tr><th scope="col"><span class="label">Member</span></th>${head}</tr></thead><tbody>${body}</tbody></table></div>
+    <ul class="legend">${legend.map(s => `<li><i class="cell ${s}" aria-hidden="true"></i>${CELL[s]}</li>`).join('')}</ul>
   </section>
   <section class="card">
-    <div class="cardhead"><h2>Behind on payments</h2></div>
-    ${behind.length ? `<ul class="list">${behind.map(r => `<li><span class="name">${esc(r.m.name)}</span><span class="sub">${r.x.missed.map(monthShort).join(', ')}</span><span class="amt bad">${fmtR(r.x.owed)}</span></li>`).join('')}</ul>` : '<p class="empty">Nobody is behind. Everyone has paid up to date.</p>'}
+    <div class="card-head"><h2>Behind on payments</h2></div>
+    ${behind.length ? `<ul class="list">${behind.map(r => `<li><span class="name">${esc(r.m.name)}</span><span class="sub">${r.x.missed.map(monthShort).join(', ')}</span><span class="amt text-bad">${fmtR(r.x.owed)}</span></li>`).join('')}</ul>` : '<p class="empty">Nobody is behind. Everyone has paid up to date.</p>'}
   </section>
   ${st.meetings ? `<section class="card">
-    <div class="cardhead"><h2>Missed meetings</h2><p>Absent without an apology${st.meetFine ? ' · ' + fmtR(st.meetFine) + ' fine each time' : ''}.</p></div>
-    ${absent.length ? `<ul class="list">${absent.map(r => `<li><span class="name">${esc(r.m.name)}</span><span class="sub">${r.x.absentKeys.map(monthShort).join(', ')} · at ${r.x.attended} of ${r.x.meetings} meetings</span><span class="amt bad">${r.x.absentKeys.length} missed</span></li>`).join('')}</ul>` : '<p class="empty">Nobody has missed a meeting without an apology.</p>'}
+    <div class="card-head"><h2>Missed meetings</h2><p>Absent without an apology${st.meetFine ? ' · ' + fmtR(st.meetFine) + ' fine each time' : ''}.</p></div>
+    ${absent.length ? `<ul class="list">${absent.map(r => `<li><span class="name">${esc(r.m.name)}</span><span class="sub">${r.x.absentKeys.map(monthShort).join(', ')} · at ${r.x.attended} of ${r.x.meetings} meetings</span><span class="amt text-bad">${r.x.absentKeys.length} missed</span></li>`).join('')}</ul>` : '<p class="empty">Nobody has missed a meeting without an apology.</p>'}
   </section>` : ''}
   <section class="card">
-    <div class="cardhead"><h2>Latest activity</h2><p>Who confirmed what, and when.</p></div>
-    ${d.activity.length ? `<ul class="list activity">${d.activity.slice(0, 15).map(a => `<li><span class="act"><span>${esc(describe(a))}</span><span class="sub">${fmtTs(a.at)}</span></span></li>`).join('')}</ul>` : '<p class="empty">Changes show up here as the book is updated.</p>'}
+    <div class="card-head"><h2>Latest activity</h2><p>Who confirmed what, and when.</p></div>
+    ${d.activity.length ? `<ul class="list list--activity">${d.activity.slice(0, 15).map(a => `<li><span class="activity-text">${esc(describe(a))}</span><span class="sub">${fmtTs(a.at)}</span></li>`).join('')}</ul>` : '<p class="empty">Changes show up here as the book is updated.</p>'}
   </section>`;
 }
 function shareView(d) {
@@ -653,13 +673,13 @@ function shareView(d) {
   const sum = summaryText(d, k), owe = outstanding(d, k), rem = reminderText(d, k, S.tone);
   return `${monthBar(keys, k)}
   <section class="card">
-    <div class="cardhead"><h2>Month summary</h2><p>For the group chat${d.st.meetings ? ', with the meeting register' : ''}. Copy it, or open WhatsApp with it ready to send.</p></div>
+    <div class="card-head"><h2>Month summary</h2><p>For the group chat${d.st.meetings ? ', with the meeting register' : ''}. Copy it, or open WhatsApp with it ready to send.</p></div>
     <pre class="bubble" id="sumText">${esc(sum)}</pre>
     <div class="actions"><button type="button" class="btn" data-act="copy" data-src="sumText">${ICON.copy}Copy</button><a class="btn" href="${esc(waLink(sum))}" target="_blank" rel="noopener">${ICON.chat}Open in WhatsApp</a></div>
   </section>
   <section class="card">
-    <div class="cardhead"><h2>Nudge who hasn’t paid</h2><p>${owe.length ? owe.length + (owe.length === 1 ? ' person still owes' : ' people still owe') + ' for ' + monthName(k) + '.' : 'Everyone has paid for ' + monthName(k) + '. Nobody to nudge.'}</p></div>
-    ${owe.length ? `<div class="seg" role="radiogroup" aria-label="Tone">${TONES.map(t => `<button type="button" role="radio" aria-checked="${S.tone === t.id}" data-act="tone" data-tone="${t.id}">${t.label}</button>`).join('')}</div>
+    <div class="card-head"><h2>Nudge who hasn’t paid</h2><p>${owe.length ? owe.length + (owe.length === 1 ? ' person still owes' : ' people still owe') + ' for ' + monthName(k) + '.' : 'Everyone has paid for ' + monthName(k) + '. Nobody to nudge.'}</p></div>
+    ${owe.length ? `<div class="segmented" role="group" aria-label="Tone">${TONES.map(t => `<button type="button" aria-pressed="${S.tone === t.id}" data-act="tone" data-tone="${t.id}">${t.label}</button>`).join('')}</div>
     <pre class="bubble" id="remText">${esc(rem)}</pre>
     <div class="actions"><button type="button" class="btn" data-act="copy" data-src="remText">${ICON.copy}Copy</button><a class="btn" href="${esc(waLink(rem))}" target="_blank" rel="noopener">${ICON.chat}Open in WhatsApp</a></div>` : ''}
   </section>`;
@@ -670,31 +690,31 @@ function memberView(d) {
   const st = d.st, tk = todayKey(), keys = cycleKeys(st, d.members), meId = d.me && d.me.memberId, me = meId && findMember(d, meId);
   let setup = '';
   if (d.canManage && d.treasurer && !d.treasurer.joined) {
-    setup = `<section class="note info"><p><b>${esc(d.treasurer.name)} hasn’t joined yet.</b> Send the treasurer’s invite link so they can start confirming payments. Until then, nobody can confirm.</p><button type="button" class="btn primary sm" data-act="invite" data-id="${esc(d.treasurer.memberId)}">${ICON.link}Invite ${esc(firstName(d.treasurer.name))}</button></section>`;
+    setup = `<section class="note note--info"><p><b>${esc(d.treasurer.name)} hasn’t joined yet.</b> Send the treasurer’s invite link so they can start confirming payments. Until then, nobody can confirm.</p><button type="button" class="btn btn--primary btn--sm" data-act="invite" data-id="${esc(d.treasurer.memberId)}">${ICON.link}Invite ${esc(firstName(d.treasurer.name))}</button></section>`;
   }
   if (!me) return setup + `<section class="card"><p class="empty">You’re not listed as a member of this stokvel.</p></section>`;
   const cur = keys.includes(tk) ? tk : (monthDiff(keys[0], tk) < 0 ? keys[0] : keys[keys.length - 1]);
   const mk = markOf(d, cur, meId), bal = balance(d, meId);
   let nowLine;
   if (!isActive(me, cur)) nowLine = `<p class="sub">You’re not paying in ${monthName(cur)}.</p>`;
-  else if (mk) nowLine = `<div class="meetrow"><div><p class="label">${monthName(cur)}</p><p class="meetline">${mk.status === 'part' ? fmtR(paidAmount(st, mk)) + ' of ' + fmtR(st.amount) + ' confirmed' : 'Confirmed ' + fmtTs(mk.at)}</p></div>${stampHTML(mk.status, mk.status === 'part' ? 'Part' : mk.status === 'late' ? 'Late' : 'Paid', mk.status === 'part' ? fmtR(paidAmount(st, mk)) : fmtTs(mk.at), meId + cur)}</div>`;
-  else nowLine = `<div class="meetrow"><div><p class="label">${monthName(cur)}</p><p class="meetline${isDue(st, cur) ? ' bad' : ''}">${isDue(st, cur) ? 'Not confirmed · was due ' + fmtDate(dueDate(cur, st.payDay)) : 'Not confirmed yet · due ' + fmtDate(dueDate(cur, st.payDay))}</p></div></div>`;
+  else if (mk) nowLine = `<div class="info-row"><div><p class="label">${monthName(cur)}</p><p class="info-value">${mk.status === 'part' ? fmtR(paidAmount(st, mk)) + ' of ' + fmtR(st.amount) + ' confirmed' : 'Confirmed ' + fmtTs(mk.at)}</p></div>${stampHTML(mk.status, mk.status === 'part' ? 'Part' : mk.status === 'late' ? 'Late' : 'Paid', mk.status === 'part' ? fmtR(paidAmount(st, mk)) : fmtTs(mk.at), meId + cur)}</div>`;
+  else nowLine = `<div class="info-row"><div><p class="label">${monthName(cur)}</p><p class="info-value${isDue(st, cur) ? ' text-bad' : ''}">${isDue(st, cur) ? 'Not confirmed · was due ' + fmtDate(dueDate(cur, st.payDay)) : 'Not confirmed yet · due ' + fmtDate(dueDate(cur, st.payDay))}</p></div></div>`;
   const shown = keys.filter(k => monthDiff(k, tk) >= 0 && isActive(me, k)).reverse();
   const history = shown.map(k => {
     const c = markOf(d, k, meId), cs = cellState(d, k, meId);
     const sub = c ? (c.status === 'part' ? 'Part payment · confirmed ' + fmtTs(c.at) : 'Confirmed ' + fmtTs(c.at)) : cs === 'missed' ? 'Not confirmed · was due ' + fmtDate(dueDate(k, st.payDay)) : 'Due ' + fmtDate(dueDate(k, st.payDay));
-    const right = c ? `<span class="amt">${fmtR(paidAmount(st, c))}</span>` : `<span class="nostamp${cs === 'missed' ? ' bad' : ''}">${cs === 'missed' ? 'Owing' : 'Not yet'}</span>`;
-    return `<li><span class="name">${monthLong(k)} ${c ? miniStamp(c.status) : ''}</span><span class="sub">${sub}</span>${right}</li>`;
+    const end = c ? `<span class="amt">${fmtR(paidAmount(st, c))}</span>` : `<span class="no-stamp${cs === 'missed' ? ' text-bad' : ''}">${cs === 'missed' ? 'Owing' : 'Not yet'}</span>`;
+    return `<li><span class="name">${monthLong(k)} ${c ? miniStamp(c.status) : ''}</span><span class="sub">${sub}</span>${end}</li>`;
   }).join('');
   const notes = [];
-  if (bal.owed) notes.push(`<span class="bad">You’re behind ${fmtR(bal.owed)} (${bal.missed.map(monthShort).join(', ')}).</span>`);
+  if (bal.owed) notes.push(`<span class="text-bad">You’re behind ${fmtR(bal.owed)} (${bal.missed.map(monthShort).join(', ')}).</span>`);
   if (bal.fines) notes.push(`Fines so far: ${fmtR(bal.fines)}.`);
   const mine = `<section class="card" aria-label="My contributions">
-    <div class="sum-main"><p class="label">What I’ve paid</p><p class="amount"><span class="big">${fmtR(bal.paid)}</span><span class="of">confirmed so far</span></p></div>
-    ${notes.length ? `<p class="sum-foot">${notes.join(' ')}</p>` : ''}
-    <hr class="split">
+    <div class="stat"><p class="label">What I’ve paid</p><p class="total"><span class="total-value">${fmtR(bal.paid)}</span><span class="total-of">confirmed so far</span></p></div>
+    ${notes.length ? `<p class="card-note">${notes.join(' ')}</p>` : ''}
+    <hr class="divider">
     ${nowLine}
-    ${history ? `<details class="more"><summary>Every month (${shown.length})</summary><ul class="list">${history}</ul></details>` : ''}
+    ${history ? `<details class="disclosure"><summary>Every month (${shown.length})</summary><ul class="list">${history}</ul></details>` : ''}
   </section>`;
 
   const allCollected = Object.entries(d.totals).filter(([k]) => keys.includes(k)).reduce((a, [, v]) => a + (v.collected || 0), 0);
@@ -704,36 +724,36 @@ function memberView(d) {
   let potLine = '';
   if (st.kind === 'rotating') {
     const rcp = recipientOf(st, d.members, cur), po = payoutOf(d, cur);
-    if (rcp) potLine = `<p class="sum-foot">${po ? 'The ' + monthName(cur) + ' pot was paid out to ' + esc(rcp.id === meId ? 'you' : rcp.name) + ' on ' + fmtTs(po.at) + '.' : 'The ' + monthName(cur) + ' pot goes to ' + (rcp.id === meId ? '<b>you</b>' : esc(rcp.name)) + ' on ' + fmtDate(dueDate(cur, st.payDay)) + '.'}</p>`;
+    if (rcp) potLine = `<p class="card-note">${po ? 'The ' + monthName(cur) + ' pot was paid out to ' + esc(rcp.id === meId ? 'you' : rcp.name) + ' on ' + fmtTs(po.at) + '.' : 'The ' + monthName(cur) + ' pot goes to ' + (rcp.id === meId ? '<b>you</b>' : esc(rcp.name)) + ' on ' + fmtDate(dueDate(cur, st.payDay)) + '.'}</p>`;
   } else {
-    potLine = `<p class="sum-foot">Everyone pays in until ${monthLong(keys[keys.length - 1])}.</p>`;
+    potLine = `<p class="card-note">Everyone pays in until ${monthLong(keys[keys.length - 1])}.</p>`;
   }
   const group = `<section class="card" aria-label="Everyone together">
-    <div class="sum-main"><p class="label">Everyone together</p><p class="amount"><span class="big">${fmtR(allCollected)}</span><span class="of">collected in total</span></p></div>
-    <div class="meetrow"><div><p class="label">${monthName(cur)}</p><p class="meetline">${fmtR(curTotals.collected)} of ${fmtR(target)}</p></div><p class="sub">${curTotals.paid} paid in full</p></div>
-    <div class="bar" role="img" aria-label="${pct}% of this month’s contributions collected"><i style="--w:${pct}%"></i></div>
+    <div class="stat"><p class="label">Everyone together</p><p class="total"><span class="total-value">${fmtR(allCollected)}</span><span class="total-of">collected in total</span></p></div>
+    <div class="info-row"><div><p class="label">${monthName(cur)}</p><p class="info-value">${fmtR(curTotals.collected)} of ${fmtR(target)}</p></div><p class="sub">${curTotals.paid} paid in full</p></div>
+    <div class="progress" role="img" aria-label="${pct}% of this month’s contributions collected"><i style="--w:${pct}%"></i></div>
     ${potLine}
   </section>`;
 
   let meetings = '';
   if (st.meetings) {
     const held = keys.map(k => [k, meetStats(d, k)]).filter(([, m]) => m).reverse();
-    const att = bal.meetings ? `<p class="sum-foot">You were at ${bal.attended} of ${bal.meetings} meetings.</p>` : '';
+    const att = bal.meetings ? `<p class="card-note">You were at ${bal.attended} of ${bal.meetings} meetings.</p>` : '';
     const peopleHTML = ms => {
-      const group = (key, label) => ms[key].length ? `<div><p class="label">${label} (${ms[key].length})</p><p class="names">${ms[key].map(m => `<span class="${key}${m.id === meId ? ' me' : ''}"><i></i>${esc(m.id === meId ? m.name + ' (you)' : m.name)}</span>`).join('')}</p></div>` : '';
-      return `<div class="people">${group('present', 'Present')}${group('apology', 'Apology')}${group('absent', 'Absent')}${group('unmarked', 'Not marked')}</div>`;
+      const pills = (key, label) => ms[key].length ? `<div><p class="label">${label} (${ms[key].length})</p><ul class="name-pills">${ms[key].map(m => `<li class="${key}${m.id === meId ? ' is-me' : ''}"><i aria-hidden="true"></i>${esc(m.id === meId ? m.name + ' (you)' : m.name)}</li>`).join('')}</ul></div>` : '';
+      return `<div class="people">${pills('present', 'Present')}${pills('apology', 'Apology')}${pills('absent', 'Absent')}${pills('unmarked', 'Not marked')}</div>`;
     };
     if (held.length) {
       const [lk, lm] = held[0];
       const earlier = held.slice(1);
       meetings = `<section class="card" aria-label="Meetings">
-        <div class="cardhead"><p class="label">Meetings</p><h2>${fmtDay(lm.date)}</h2><p>${monthLong(lk)} · ${lm.present.length} of ${lm.count} there</p></div>
+        <div class="card-head"><p class="label">Meetings</p><h2>${fmtDay(lm.date)}</h2><p>${monthLong(lk)} · ${lm.present.length} of ${lm.count} there</p></div>
         ${peopleHTML(lm)}
         ${att}
-        ${earlier.length ? `<details class="more"><summary>Earlier meetings (${earlier.length})</summary><div class="meetlist">${earlier.map(([k, m]) => `<div><h3>${fmtDay(m.date)} · ${m.present.length} of ${m.count} there</h3>${peopleHTML(m)}</div>`).join('')}</div></details>` : ''}
+        ${earlier.length ? `<details class="disclosure"><summary>Earlier meetings (${earlier.length})</summary><div class="meeting-list">${earlier.map(([, m]) => `<div><h3>${fmtDay(m.date)} · ${m.present.length} of ${m.count} there</h3>${peopleHTML(m)}</div>`).join('')}</div></details>` : ''}
       </section>`;
     } else {
-      meetings = `<section class="card" aria-label="Meetings"><div class="cardhead"><p class="label">Meetings</p><h2>No register yet</h2><p>Attendance shows here once ${d.treasurer ? esc(d.treasurer.name) : 'the treasurer'} takes the register.</p></div></section>`;
+      meetings = `<section class="card" aria-label="Meetings"><div class="card-head"><p class="label">Meetings</p><h2>No register yet</h2><p>Attendance shows here once ${d.treasurer ? esc(d.treasurer.name) : 'the treasurer'} takes the register.</p></div></section>`;
     }
   }
 
@@ -745,8 +765,8 @@ function memberView(d) {
       const k = keys[idx];
       head = idx < ci ? `You received the pot in ${monthLong(k)}.` : idx === ci ? `It’s your turn: the pot comes to you on ${fmtDate(dueDate(k, st.payDay))}.` : `Your turn: ${monthLong(k)} (${idx - ci === 1 ? 'next month' : 'in ' + (idx - ci) + ' months'}).`;
     }
-    const rows = r.map((m, i) => `<li class="row${m.id === meId ? ' me' : ''}"><span class="no"><b>${monthShort(keys[i])}</b><small>${keys[i].slice(0, 4)}</small></span><div class="rowmain"><span class="name">${esc(m.id === meId ? m.name + ' (you)' : m.name)}${i === ci ? ' <em class="now">This month</em>' : ''}</span>${payoutOf(d, keys[i]) ? '<span class="sub">Paid out</span>' : ''}</div><div class="right"></div></li>`).join('');
-    turn = `<section class="card" aria-label="Payout order"><div class="cardhead"><p class="label">Payout order</p><h2>${head}</h2></div></section><ol class="ledger turns">${rows}</ol>`;
+    const rows = r.map((m, i) => `<li class="ledger-row${m.id === meId ? ' is-me' : ''}"><span class="row-num"><b>${monthShort(keys[i])}</b><small>${keys[i].slice(0, 4)}</small></span><div class="row-main"><span class="name">${esc(m.id === meId ? m.name + ' (you)' : m.name)}${i === ci ? nameTag('This month', true) : ''}</span>${payoutOf(d, keys[i]) ? '<span class="sub">Paid out</span>' : ''}</div><div class="row-end"></div></li>`).join('');
+    turn = `<section class="card" aria-label="Payout order"><div class="card-head"><p class="label">Payout order</p><h2>${head}</h2></div></section><ol class="ledger" aria-label="Payout order">${rows}</ol>`;
   }
   return setup + mine + group + meetings + turn;
 }
@@ -755,11 +775,11 @@ function paintTabs(d) {
   const tabs = $('#tabs');
   if (!tabs.childElementCount) {
     tabs.innerHTML = [['month', 'Month', ICON.month], ['turns', 'Turns', ICON.turns], ['record', 'Record', ICON.record], ['share', 'Share', ICON.share]]
-      .map(([id, label, icon]) => `<button type="button" data-tab="${id}"><span class="ti">${icon}</span><span class="tl">${label}</span></button>`).join('');
+      .map(([id, label, icon]) => `<button type="button" data-tab="${id}"><span class="tab-icon">${icon}</span><span class="tab-label">${label}</span></button>`).join('');
   }
   const t = $('[data-tab="turns"]', tabs);
-  $('.tl', t).textContent = d.st.kind === 'rotating' ? 'Turns' : 'Fund';
-  $('.ti', t).innerHTML = d.st.kind === 'rotating' ? ICON.turns : ICON.fund;
+  $('.tab-label', t).textContent = d.st.kind === 'rotating' ? 'Turns' : 'Fund';
+  $('.tab-icon', t).innerHTML = d.st.kind === 'rotating' ? ICON.turns : ICON.fund;
   for (const b of $$('[data-tab]', tabs)) {
     if (b.dataset.tab === S.tab) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   }
@@ -767,6 +787,7 @@ function paintTabs(d) {
 
 function render() {
   const app = $('#app'), bar = $('#tabbar');
+  const keep = app.contains(document.activeElement) ? focusTarget(document.activeElement) : null;
   let html, tabs = false;
   const s = S.session;
   if (S.bootError) html = bootErrorHTML();
@@ -776,8 +797,8 @@ function render() {
   else if (!s.user) html = s.setupNeeded ? setupHTML() : loginHTML();
   else if (S.route.name === 'stokvel') {
     const d = S.d;
-    if (S.dError) html = `<header class="top"><div class="brandrow"><button type="button" class="back" data-act="home">${ICON.left}My stokvels</button></div></header><section class="card"><p class="empty">${esc(S.dError)}</p></section>`;
-    else if (!d) html = coverHTML('Opening the book…');
+    if (S.dError) html = `<header class="page-head"><div class="topbar">${backLink()}</div></header><section class="card"><p class="empty">${esc(S.dError)}</p></section>`;
+    else if (!d) html = stokLoadingHTML();
     else if (d.role === 'treasurer') {
       tabs = true;
       let view;
@@ -793,24 +814,53 @@ function render() {
   document.body.classList.toggle('has-tabs', tabs);
   if (tabs) paintTabs(S.d);
   S.justStamped = null;
+  if (keep) restoreFocus(keep, app);
+}
+
+// Re-rendering replaces the page's buttons. These keep keyboard focus on the same
+// control afterwards, or failing that on another control for the same member.
+function focusTarget(el) {
+  const ds = el && el.dataset;
+  if (!ds || !ds.act) return null;
+  let sel = '[data-act="' + ds.act + '"]';
+  for (const k of ['id', 'k', 'v', 'tone', 'mode']) if (ds[k]) sel += '[data-' + k + '="' + CSS.escape(ds[k]) + '"]';
+  return { sel, id: ds.id || '' };
+}
+function restoreFocus(t, root) {
+  let el = $(t.sel, root);
+  if ((!el || el.disabled) && t.id) el = $('[data-id="' + CSS.escape(t.id) + '"]', root);
+  if (el && !el.disabled) el.focus({ preventScroll: true });
 }
 
 /* ---------- sheets and toasts ---------- */
 function openSheet(name, renderer) {
   const sh = $('#sheet');
   hideToast();
-  if (!S.sheet) S.lastFocus = document.activeElement;
-  sh.innerHTML = `<div class="scrim" data-act="close"></div><div class="panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"><div class="in">${renderer()}</div></div>`;
+  if (!S.sheet) { S.lastFocus = document.activeElement; S.lastFocusAt = focusTarget(document.activeElement); }
+  sh.innerHTML = `<div class="scrim" data-act="close"></div><div class="sheet-panel" role="dialog" aria-modal="true" aria-labelledby="sheetTitle"><div class="sheet-body">${renderer()}</div></div>`;
   sh.hidden = false;
   S.sheet = name;
   S.sheetRender = renderer;
-  document.body.classList.add('locked');
-  requestAnimationFrame(() => { const f = sh.querySelector('[data-first]') || sh.querySelector('.sheethead .iconbtn'); if (f) f.focus({ preventScroll: true }); });
+  setBackground(true);
+  requestAnimationFrame(focusSheet);
+}
+function focusSheet() {
+  const sh = $('#sheet');
+  const f = sh.querySelector('[data-first]') || sh.querySelector('.sheet-head .icon-btn');
+  if (f) f.focus({ preventScroll: true });
+}
+// While a sheet is open, the page behind it can't be scrolled, tapped or tabbed to.
+function setBackground(locked) {
+  $('#app').inert = locked;
+  $('#tabbar').inert = locked;
+  document.documentElement.classList.toggle('is-locked', locked);
 }
 function refreshSheet() {
   if (!S.sheet || !S.sheetRender) return;
-  const inner = $('#sheet .in');
-  if (inner) inner.innerHTML = S.sheetRender();
+  const body = $('#sheet .sheet-body');
+  if (!body) return;
+  body.innerHTML = S.sheetRender();
+  if (!body.contains(document.activeElement)) focusSheet();
 }
 function closeSheet(silent) {
   const sh = $('#sheet');
@@ -821,21 +871,36 @@ function closeSheet(silent) {
   sh.innerHTML = '';
   S.sheet = null;
   S.sheetRender = null;
-  document.body.classList.remove('locked');
-  if (!silent && S.lastFocus && S.lastFocus.isConnected) S.lastFocus.focus({ preventScroll: true });
+  setBackground(false);
+  if (!silent) {
+    if (S.lastFocus && S.lastFocus.isConnected) S.lastFocus.focus({ preventScroll: true });
+    else if (S.lastFocusAt) restoreFocus(S.lastFocusAt, $('#app'));
+  }
   return was;
 }
+
+// The toast region is always in the page, so screen readers announce each message.
 let toastTimer = 0;
 function toast(msg, action) {
-  const t = $('#toast');
-  t.innerHTML = `<span>${esc(msg)}</span>${action ? '<button type="button" id="toastAct">' + esc(action.label) + '</button>' : ''}`;
-  t.hidden = false;
-  t.classList.remove('show'); void t.offsetWidth; t.classList.add('show');
+  const region = $('#toast');
+  region.innerHTML = `<div class="toast"><span>${esc(msg)}</span>${action ? '<button type="button" id="toastAct">' + esc(action.label) + '</button>' : ''}</div>`;
   if (action) $('#toastAct').onclick = () => { hideToast(); action.run(); };
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(hideToast, action ? 5000 : 3200);
+  toastTimer = setTimeout(hideToast, action ? 6000 : 3200);
 }
-function hideToast() { const t = $('#toast'); t.hidden = true; t.innerHTML = ''; }
+function hideToast() { clearTimeout(toastTimer); $('#toast').innerHTML = ''; }
+// An Undo belongs to the screen it was offered on.
+function dismissUndo() { if ($('#toastAct')) hideToast(); }
+{
+  // Hold the toast while someone points at it or tabs into it.
+  const region = $('#toast');
+  const hold = () => clearTimeout(toastTimer);
+  const resume = () => { if (region.firstChild) { clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 2500); } };
+  region.addEventListener('pointerenter', hold);
+  region.addEventListener('focusin', hold);
+  region.addEventListener('pointerleave', resume);
+  region.addEventListener('focusout', resume);
+}
 function formError(id, msg) { const el = $('#' + id); if (!el) return toast(msg); el.textContent = msg; el.hidden = !msg; if (msg) el.scrollIntoView({ block: 'nearest' }); }
 function busyButton(id, label) {
   const b = $('#' + id);
@@ -846,111 +911,127 @@ function busyButton(id, label) {
 }
 
 /* ---------- treasurer actions ---------- */
+// Each change names the stokvel it was made in. The book on screen may have been
+// reloaded in the meantime (a fresh copy of the same stokvel), so look it up again.
+const liveBook = sid => (S.d && S.d.st.id === sid ? S.d : null);
+const showing = d => !!d && S.route.name === 'stokvel' && S.d === d;
+
 function setMark(d, k, id, mark) {
   d.marks[k] = Object.assign({}, d.marks[k] || {});
   if (mark) d.marks[k][id] = mark; else delete d.marks[k][id];
 }
-async function confirmPay(memberId, month, status, amount) {
-  const d = S.d, prev = markOf(d, month, memberId);
+async function confirmPay(sid, memberId, month, status, amount) {
+  const d = liveBook(sid);
+  if (!d) return { ok: false, prev: null };
+  const prev = markOf(d, month, memberId);
   setMark(d, month, memberId, status ? { status, amount: status === 'part' ? amount : d.st.amount, at: new Date().toISOString(), by: S.session.user.name } : null);
-  render();
+  if (showing(d)) render();
   bump(1);
   try {
-    const r = await api('PUT', `stokvels/${d.st.id}/contributions`, { memberId, month, status: status || null, amount });
-    const c = r.contribution;
-    setMark(d, month, memberId, c ? { status: c.status, amount: c.amount, at: c.at, by: c.byName } : null);
-    if (S.d === d) render();
+    const r = await api('PUT', `stokvels/${sid}/contributions`, { memberId, month, status: status || null, amount });
+    const c = r.contribution, next = c ? { status: c.status, amount: c.amount, at: c.at, by: c.byName } : null, now = liveBook(sid);
+    if (now) {
+      const was = markOf(now, month, memberId);
+      setMark(now, month, memberId, next);
+      // Skip the repaint when nothing visible changed, so the stamping motion can finish.
+      const same = was && next ? was.status === next.status && was.amount === next.amount && fmtTs(was.at) === fmtTs(next.at) : was === next;
+      if (!same && showing(now)) render();
+    }
     return { ok: true, prev };
   } catch (e) {
-    setMark(d, month, memberId, prev);
-    if (S.d === d) render();
+    const now = liveBook(sid);
+    if (now) { setMark(now, month, memberId, prev); if (showing(now)) render(); }
     handleError(e);
     return { ok: false, prev };
   } finally { bump(-1); }
 }
-const undoPay = (memberId, month, prev) => confirmPay(memberId, month, prev ? prev.status : null, prev ? prev.amount : undefined);
+const undoPay = (sid, memberId, month, prev) => confirmPay(sid, memberId, month, prev ? prev.status : null, prev ? prev.amount : undefined);
 
 async function quickStamp(id) {
-  const d = S.d, k = selKey(d), m = findMember(d, id);
+  const d = S.d, sid = d.st.id, k = selKey(d), m = findMember(d, id);
   if (!m) return;
   S.justStamped = k + ':' + id;
-  const r = await confirmPay(id, k, 'paid');
-  if (r.ok) toast('Confirmed ' + m.name + ' paid', { label: 'Undo', run: () => undoPay(id, k, r.prev) });
+  const r = await confirmPay(sid, id, k, 'paid');
+  if (r.ok) toast('Confirmed ' + m.name + ' paid', { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
 }
 function markSheetHTML(id) {
   const d = S.d, st = d.st, k = selKey(d), m = findMember(d, id);
   if (!m) return '';
   const mk = markOf(d, k, id), cur = mk ? mk.status : 'none', due = dueDate(k, st.payDay), at = attOf(d, k, id), mt = meetingOf(d, k);
-  const opt = (s, t, desc, first) => `<button type="button" class="opt${cur === s ? ' on' : ''}" data-act="setmark" data-s="${s}" data-id="${esc(id)}" aria-pressed="${cur === s}"${first ? ' data-first' : ''}><span class="t">${t}</span><span class="d">${desc}</span></button>`;
+  const opt = (s, t, desc, first) => `<button type="button" class="option${cur === s ? ' is-selected' : ''}" data-act="setmark" data-s="${s}" data-id="${esc(id)}" aria-pressed="${cur === s}"${first ? ' data-first' : ''}><span class="option-title">${t}</span><span class="option-desc">${desc}</span></button>`;
   const partVal = mk && mk.status === 'part' ? paidAmount(st, mk) : Math.round(st.amount / 2);
-  const meeting = st.meetings ? `<div class="opt">
-      <span class="t">Meeting</span>
-      <span class="d">${mt ? 'Register for ' + fmtDay(mt.date) + '. Tap again to clear.' : 'No register yet for ' + monthName(k) + '. This starts one.'}</span>
-      <div class="seg" role="radiogroup" aria-label="Meeting attendance">${ATTENDANCE.map(a => `<button type="button" role="radio" data-act="setatt" data-id="${esc(id)}" data-a="${a}" aria-checked="${at === a}">${ATT_LABEL[a]}</button>`).join('')}</div>
+  const meeting = st.meetings ? `<div class="option">
+      <span class="option-title">Meeting</span>
+      <span class="option-desc">${mt ? 'Register for ' + fmtDay(mt.date) + '. Tap again to clear.' : 'No register yet for ' + monthName(k) + '. This starts one.'}</span>
+      <div class="segmented" role="group" aria-label="Meeting attendance">${ATTENDANCE.map(a => `<button type="button" data-act="setatt" data-id="${esc(id)}" data-a="${a}" aria-pressed="${at === a}">${ATT_LABEL[a]}</button>`).join('')}</div>
     </div>` : '';
-  return `<div class="sheethead"><div><h3 id="sheetTitle">${esc(m.name)}</h3><p>${monthLong(k)} · ${fmtR(st.amount)} due ${fmtDate(due)}</p></div>${closeBtn}</div>
-    <div class="opts">
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">${esc(m.name)}</h2><p>${monthLong(k)} · ${fmtR(st.amount)} due ${fmtDate(due)}</p></div>${closeBtn}</div>
+    <div class="options">
       ${opt('paid', 'Paid', 'In full, on time', true)}
       ${opt('late', 'Paid late', st.lateFine ? 'In full, plus the ' + fmtR(st.lateFine) + ' late fine' : 'In full, after the due date')}
-      <div class="opt${cur === 'part' ? ' on' : ''}">
-        <label class="t" for="partAmt">Part payment</label>
-        <span class="d">How much has come in so far</span>
-        <div class="partrow"><span class="money"><i>R</i><input id="partAmt" inputmode="numeric" autocomplete="off" value="${partVal}"></span><button type="button" class="btn" data-act="setpart" data-id="${esc(id)}">Confirm part</button></div>
-        <p class="formerr" id="partErr" hidden></p>
+      <div class="option${cur === 'part' ? ' is-selected' : ''}">
+        <label class="option-title" for="partAmt">Part payment</label>
+        <span class="option-desc">How much has come in so far</span>
+        <form class="input-row" id="partForm" data-id="${esc(id)}" novalidate><span class="money-input"><i>R</i><input id="partAmt" inputmode="numeric" autocomplete="off" value="${partVal}"></span><button type="submit" class="btn">Confirm part</button></form>
+        <p class="form-error" id="partErr" role="alert" hidden></p>
       </div>
-      ${mk ? `<button type="button" class="opt quiet" data-act="setmark" data-s="none" data-id="${esc(id)}"><span class="t">Clear the confirmation</span><span class="d">Back to not paid</span></button>` : ''}
+      ${mk ? `<button type="button" class="option option--quiet" data-act="setmark" data-s="none" data-id="${esc(id)}"><span class="option-title">Clear the confirmation</span><span class="option-desc">Back to not paid</span></button>` : ''}
       ${meeting}
     </div>
     ${mk ? `<p class="fineprint">Confirmed ${fmtTs(mk.at)}${mk.by ? ' by ' + esc(mk.by) : ''}.</p>` : ''}`;
 }
 async function setMarkAction(id, s) {
-  const d = S.d, k = selKey(d), m = findMember(d, id);
+  const d = S.d, sid = d.st.id, k = selKey(d), m = findMember(d, id);
   if (!m) return;
   const prev = markOf(d, k, id);
   closeSheet();
   if ((prev ? prev.status : 'none') === s) return;
   if (s !== 'none') S.justStamped = k + ':' + id;
-  const r = await confirmPay(id, k, s === 'none' ? null : s);
-  if (r.ok) toast(s === 'none' ? 'Cleared ' + m.name + '’s confirmation' : 'Confirmed ' + m.name + (s === 'late' ? ' paid late' : ' paid'), { label: 'Undo', run: () => undoPay(id, k, r.prev) });
+  const r = await confirmPay(sid, id, k, s === 'none' ? null : s);
+  if (r.ok) toast(s === 'none' ? 'Cleared ' + m.name + '’s confirmation' : 'Confirmed ' + m.name + (s === 'late' ? ' paid late' : ' paid'), { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
 }
 async function setPartAction(id) {
-  const d = S.d, st = d.st, k = selKey(d), m = findMember(d, id);
+  const d = S.d, sid = d.st.id, st = d.st, k = selKey(d), m = findMember(d, id);
   if (!m) return;
   const amt = toInt($('#partAmt').value);
   if (!(amt > 0)) { formError('partErr', 'Enter the amount they paid, in rand.'); return; }
   closeSheet();
   S.justStamped = k + ':' + id;
-  const r = await confirmPay(id, k, 'part', amt);
-  if (r.ok) toast(amt >= st.amount ? 'That covers it. Confirmed ' + m.name + ' paid' : 'Confirmed ' + fmtR(amt) + ' from ' + m.name, { label: 'Undo', run: () => undoPay(id, k, r.prev) });
+  // A "part" payment that covers the month is simply paid.
+  const full = amt >= st.amount;
+  const r = await confirmPay(sid, id, k, full ? 'paid' : 'part', full ? undefined : amt);
+  if (r.ok) toast(full ? 'That covers it. Confirmed ' + m.name + ' paid' : 'Confirmed ' + fmtR(amt) + ' from ' + m.name, { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
 }
-async function putMeeting(k, heldOn, attendance, merge) {
-  const d = S.d;
+async function putMeeting(sid, k, heldOn, attendance, merge) {
   bump(1);
   try {
-    const r = await api('PUT', `stokvels/${d.st.id}/meetings/${k}`, { heldOn, attendance, merge });
-    d.meetings[k] = { date: r.meeting.heldOn, att: r.meeting.attendance || {} };
-    if (S.d === d) render();
+    const r = await api('PUT', `stokvels/${sid}/meetings/${k}`, { heldOn, attendance, merge });
+    const d = liveBook(sid);
+    if (d) { d.meetings[k] = { date: r.meeting.heldOn, att: r.meeting.attendance || {} }; if (showing(d)) render(); }
     return true;
   } catch (e) { handleError(e); return false; }
   finally { bump(-1); }
 }
 async function setAtt(id, a) {
-  const d = S.d, k = selKey(d), m = findMember(d, id);
+  const d = S.d, sid = d.st.id, k = selKey(d), m = findMember(d, id);
   if (!m) return;
   const prev = attOf(d, k, id), mt = meetingOf(d, k), next = prev === a ? null : a;
   closeSheet();
   const date = mt ? mt.date : defaultMeetDate(d.st, k);
-  const ok = await putMeeting(k, date, { [id]: next }, true);
-  if (ok) toast(next ? m.name + ': ' + ATT_LABEL[next].toLowerCase() + ' at the meeting' : 'Cleared ' + m.name + '’s meeting mark', { label: 'Undo', run: () => putMeeting(k, date, { [id]: prev }, true) });
+  const ok = await putMeeting(sid, k, date, { [id]: next }, true);
+  if (ok) toast(next ? m.name + ': ' + ATT_LABEL[next].toLowerCase() + ' at the meeting' : 'Cleared ' + m.name + '’s meeting mark', { label: 'Undo', run: () => putMeeting(sid, k, date, { [id]: prev }, true) });
 }
 function registerSheetHTML() {
   const d = S.d, st = d.st, r = S.reg, act = activeIn(st, d.members, r.k), mt = meetingOf(d, r.k);
-  const rows = act.map(m => `<li><span class="regname">${esc(m.name)}</span><div class="seg tight" role="radiogroup" aria-label="${esc(m.name)}">${ATTENDANCE.map(a => `<button type="button" role="radio" data-act="regSet" data-id="${esc(m.id)}" data-a="${a}" aria-checked="${r.att[m.id] === a}">${ATT_LABEL[a]}</button>`).join('')}</div></li>`).join('');
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Meeting register</h3><p>${monthLong(r.k)}. Mark each member, then save.${st.meetFine ? ' Absent without an apology carries the ' + fmtR(st.meetFine) + ' fine.' : ''}</p></div>${closeBtn}</div>
-    <div class="regtop"><label class="field" for="regDate"><span class="lab">Meeting date</span><input id="regDate" type="date" value="${mt ? mt.date : defaultMeetDate(st, r.k)}"></label><button type="button" class="btn sm" data-act="regAll">Everyone else present</button></div>
-    <ul class="reglist">${rows}</ul>
-    <p class="formerr" id="regErr" role="alert" hidden></p>
-    <div class="actions end"><button type="button" class="btn" data-act="close">Cancel</button><button type="button" class="btn primary" data-act="regSave" id="regSave">Save register</button></div>`;
+  const rows = act.map(m => `<li><span class="register-name">${esc(m.name)}</span><div class="segmented segmented--compact" role="group" aria-label="${esc(m.name)}">${ATTENDANCE.map(a => `<button type="button" data-act="regSet" data-id="${esc(m.id)}" data-a="${a}" aria-pressed="${r.att[m.id] === a}">${ATT_LABEL[a]}</button>`).join('')}</div></li>`).join('');
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Meeting register</h2><p>${monthLong(r.k)}. Mark each member, then save.${st.meetFine ? ' Absent without an apology carries the ' + fmtR(st.meetFine) + ' fine.' : ''}</p></div>${closeBtn}</div>
+    <div class="register-head">${field('regDate', 'Meeting date', `<input id="regDate" type="date" value="${mt ? mt.date : defaultMeetDate(st, r.k)}">`)}<button type="button" class="btn btn--sm" data-act="regAll">Everyone else present</button></div>
+    <ul class="register-list">${rows}</ul>
+    <p class="form-error" id="regErr" role="alert" hidden></p>
+    <div class="actions actions--end"><button type="button" class="btn" data-act="close">Cancel</button><button type="button" class="btn btn--primary" data-act="regSave" id="regSave">Save register</button></div>`;
+}
+function paintRegister() {
+  for (const b of $$('#sheet [data-act="regSet"]')) b.setAttribute('aria-pressed', String(S.reg.att[b.dataset.id] === b.dataset.a));
 }
 function openRegister() {
   const d = S.d, k = selKey(d);
@@ -965,44 +1046,53 @@ async function saveRegister() {
   if (!DATE_RE.test(date)) { formError('regErr', 'Pick the date of the meeting.'); return; }
   const counts = { present: 0, apology: 0, absent: 0 };
   for (const v of Object.values(r.att)) if (v) counts[v]++;
-  const k = r.k, att = Object.assign({}, r.att);
+  const sid = S.d.st.id, k = r.k, att = Object.assign({}, r.att);
   closeSheet();
-  if (await putMeeting(k, date, att, false)) toast(`Register saved: ${counts.present} present, ${counts.apology} apology, ${counts.absent} absent`);
+  if (await putMeeting(sid, k, date, att, false)) toast(`Register saved: ${counts.present} present, ${counts.apology} apology, ${counts.absent} absent`);
 }
-async function setPayout(k, on) {
-  const d = S.d, prev = payoutOf(d, k);
+async function setPayout(sid, k, on) {
+  const d0 = liveBook(sid), prev = d0 ? payoutOf(d0, k) : null;
   if (on) S.justStamped = 'po:' + k;
   bump(1);
   try {
-    const r = await api('PUT', `stokvels/${d.st.id}/payouts/${k}`, { paid: on });
-    if (r.payout) d.payouts[k] = { at: r.payout.at, by: r.payout.byName }; else delete d.payouts[k];
-    if (S.d === d) render();
-    toast(on ? 'Stamped as paid out' : 'Cleared the paid-out stamp', { label: 'Undo', run: () => setPayout(k, !on && !!prev) });
+    const r = await api('PUT', `stokvels/${sid}/payouts/${k}`, { paid: on });
+    const d = liveBook(sid);
+    if (d) {
+      if (r.payout) d.payouts[k] = { at: r.payout.at, by: r.payout.byName }; else delete d.payouts[k];
+      if (showing(d)) render();
+    }
+    toast(on ? 'Stamped as paid out' : 'Cleared the paid-out stamp', { label: 'Undo', run: () => setPayout(sid, k, !on && !!prev) });
   } catch (e) { handleError(e); }
   finally { bump(-1); }
 }
 function payoutSheetHTML(k) {
   const po = payoutOf(S.d, k);
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Paid out · ${monthLong(k)}</h3><p>${po ? 'Stamped ' + fmtTs(po.at) + (po.by ? ' by ' + esc(po.by) : '') + '.' : ''}</p></div>${closeBtn}</div>
-    <div class="actions end"><button type="button" class="btn" data-act="close" data-first>Keep it</button><button type="button" class="btn danger" data-act="clearPayout" data-k="${k}">Clear the stamp</button></div>`;
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Paid out · ${monthLong(k)}</h2><p>${po ? 'Stamped ' + fmtTs(po.at) + (po.by ? ' by ' + esc(po.by) : '') + '.' : ''}</p></div>${closeBtn}</div>
+    <div class="actions actions--end"><button type="button" class="btn" data-act="close" data-first>Keep it</button><button type="button" class="btn btn--danger" data-act="clearPayout" data-k="${k}">Clear the stamp</button></div>`;
 }
-async function saveOrder(order, msg) {
-  const d = S.d;
+// Order changes show at once and are saved one after another, so quick taps
+// on the arrows can't reach the server out of order.
+let orderQueue = Promise.resolve();
+async function saveOrder(sid, order, msg) {
+  const d = liveBook(sid);
+  if (d) { d.st.order = order; if (showing(d)) render(); }
   bump(1);
+  const job = orderQueue.then(() => api('PUT', `stokvels/${sid}/order`, { order }));
+  orderQueue = job.catch(() => {});
   try {
-    await api('PUT', `stokvels/${d.st.id}/order`, { order });
-    d.st.order = order;
-    if (S.d === d) render();
+    await job;
     if (msg) toast(msg);
-  } catch (e) { handleError(e); }
-  finally { bump(-1); }
+  } catch (e) {
+    handleError(e);
+    if (S.dId === sid) loadStokvel(sid, true);   // show what the server has
+  } finally { bump(-1); }
 }
 function moveTurn(id, dir) {
-  const st = S.d.st, ids = rotation(st, S.d.members).map(m => m.id), first = Math.max(0, monthDiff(st.startMonth, todayKey()) + 1);
+  const d = S.d, st = d.st, ids = rotation(st, d.members).map(m => m.id), first = Math.max(0, monthDiff(st.startMonth, todayKey()) + 1);
   const i = ids.indexOf(id), j = i + dir;
   if (i < first || j < first || j >= ids.length) return;
   [ids[i], ids[j]] = [ids[j], ids[i]];
-  saveOrder(ids);
+  saveOrder(st.id, ids);
 }
 function randInt(n) {
   if (window.crypto && crypto.getRandomValues) {
@@ -1021,10 +1111,10 @@ function fairShuffle(arr) {
 function drawSheetHTML() {
   const d = S.d, keys = cycleKeys(d.st, d.members), dr = S.draw, first = dr.fixed.length;
   const nm = new Map(d.members.map(m => [m.id, m.name]));
-  const rows = dr.pool.map((id, j) => `<li><span class="mo">${monthLong(keys[first + j])}</span><span class="nm" id="draw-${j}">${esc(nm.get(id))}</span></li>`).join('');
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Draw lots</h3><p>A fair shuffle of the ${dr.pool.length} turns still to come.${first ? ' Turns that have started stay where they are.' : ''}</p></div>${closeBtn}</div>
-    <ol class="drawlist">${rows}</ol>
-    <div class="actions end"><button type="button" class="btn" data-act="drawAgain" id="drawAgain" disabled>Draw again</button><button type="button" class="btn primary" data-act="drawKeep" id="drawKeep" disabled>Use this order</button></div>`;
+  const rows = dr.pool.map((id, j) => `<li><span class="draw-month">${monthLong(keys[first + j])}</span><span class="draw-name" id="draw-${j}">${esc(nm.get(id))}</span></li>`).join('');
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Draw lots</h2><p>A fair shuffle of the ${dr.pool.length} turns still to come.${first ? ' Turns that have started stay where they are.' : ''}</p></div>${closeBtn}</div>
+    <ol class="draw-list" aria-live="polite">${rows}</ol>
+    <div class="actions actions--end"><button type="button" class="btn" data-act="drawAgain" id="drawAgain" disabled>Draw again</button><button type="button" class="btn btn--primary" data-act="drawKeep" id="drawKeep" disabled>Use this order</button></div>`;
 }
 function openDraw() {
   const d = S.d, r = rotation(d.st, d.members), first = Math.max(0, monthDiff(d.st.startMonth, todayKey()) + 1);
@@ -1046,15 +1136,15 @@ function runDraw() {
     slots.forEach((el, j) => {
       if (!el) return;
       el.textContent = nm.get(dr.result[j]) || '';
-      el.classList.remove('spin', 'land'); void el.offsetWidth;
+      el.classList.remove('is-spinning', 'is-landed'); void el.offsetWidth;
       el.style.animationDelay = (j * 70) + 'ms';
-      el.classList.add('land');
+      el.classList.add('is-landed');
     });
     keep.disabled = false; again.disabled = false;
     keep.focus({ preventScroll: true });
   };
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
-  slots.forEach(el => { if (el) { el.classList.remove('land'); el.classList.add('spin'); } });
+  slots.forEach(el => { if (el) { el.classList.remove('is-landed'); el.classList.add('is-spinning'); } });
   let n = 0;
   clearInterval(dr.timer);
   dr.timer = setInterval(() => {
@@ -1065,9 +1155,9 @@ function runDraw() {
 function keepDraw() {
   const dr = S.draw;
   if (!dr || !dr.result) return;
-  const order = dr.fixed.concat(dr.result);
+  const order = dr.fixed.concat(dr.result), sid = S.d.st.id;
   closeSheet();
-  saveOrder(order, 'New payout order saved');
+  saveOrder(sid, order, 'New payout order saved');
 }
 
 /* ---------- members, invites and settings ---------- */
@@ -1078,40 +1168,49 @@ function membersSheetHTML() {
   const rows = current.map(m => {
     const isT = m.id === st.treasurerId;
     const status = m.id === meId ? 'You' : m.linked ? 'Joined' + (m.accountName ? ' as ' + esc(m.accountName) : '') : m.inviteExpires ? 'Invite link open until ' + fmtTs(m.inviteExpires) : 'Not joined yet';
-    return `<li><button type="button" data-act="memberOpen" data-id="${esc(m.id)}"><span class="name">${esc(m.name)}${isT ? ' <em class="t">Treasurer</em>' : m.title ? ' <em>' + esc(m.title) + '</em>' : ''}</span><span class="sub${!m.linked && m.id !== meId ? ' warn' : ''}">${status}</span><span class="chev">${ICON.right}</span></button></li>`;
+    return `<li><button type="button" data-act="memberOpen" data-id="${esc(m.id)}"><span class="name">${esc(m.name)}${isT ? nameTag('Treasurer', true) : m.title ? nameTag(esc(m.title)) : ''}</span><span class="sub${!m.linked && m.id !== meId ? ' text-warn' : ''}">${status}</span><span class="chev" aria-hidden="true">${ICON.right}</span></button></li>`;
   }).join('');
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Members</h3><p>${current.length} ${current.length === 1 ? 'member' : 'members'}. Tap someone to rename them, send their invite link or remove them.</p></div>${closeBtn}</div>
-    <ul class="memrows">${rows}</ul>
-    <form class="addrow" id="addForm" novalidate><input id="newMember" placeholder="New member’s name" maxlength="60" autocomplete="off" aria-label="New member’s name"><button type="submit" class="btn primary">Add</button></form>
-    <p class="formerr" id="memErr" role="alert" hidden></p>
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Members</h2><p>${current.length} ${current.length === 1 ? 'member' : 'members'}. Tap someone to rename them, send their invite link or remove them.</p></div>${closeBtn}</div>
+    <ul class="member-rows">${rows}</ul>
+    <form class="input-row" id="addForm" novalidate><input id="newMember" placeholder="New member’s name" maxlength="60" autocomplete="off" aria-label="New member’s name"><button type="submit" class="btn btn--primary">Add</button></form>
+    <p class="form-error" id="memErr" role="alert" hidden></p>
     <p class="fineprint">${st.kind === 'rotating' ? 'New members start paying this month and take the last turn for the pot.' : 'New members start paying this month.'} Members who join with an invite link can log in and see what they’ve paid.</p>
-    ${former.length ? `<div class="field"><span class="lab">Former members</span><ul class="list">${former.map(m => `<li><span class="name">${esc(m.name)}</span><span class="sub">Left ${monthLong(m.left)}</span><button type="button" class="btn sm" data-act="restore" data-id="${esc(m.id)}">Bring back</button></li>`).join('')}</ul></div>` : ''}`;
+    ${former.length ? `<div class="field"><h3 class="field-label">Former members</h3><ul class="list">${former.map(m => `<li><span class="name">${esc(m.name)}</span><span class="sub">Left ${monthLong(m.left)}</span><button type="button" class="btn btn--sm" data-act="restore" data-id="${esc(m.id)}">Bring back</button></li>`).join('')}</ul></div>` : ''}`;
 }
 function memberSheetHTML(id) {
   const d = S.d, st = d.st, m = findMember(d, id);
   if (!m) { S.memView = null; return membersSheetHTML(); }
-  const isT = m.id === st.treasurerId, isMe = d.me && d.me.memberId === m.id;
+  const isT = m.id === st.treasurerId, isMe = !!d.me && d.me.memberId === m.id;
   const account = isMe
-    ? `<div class="note info"><p><b>This is you.</b></p></div>`
+    ? `<div class="note note--info"><p><b>This is you.</b></p></div>`
     : m.linked
-      ? `<div class="note info"><p><b>${m.accountName ? 'Joined as ' + esc(stop(m.accountName)) : 'Joined.'}</b> They can log in and see what they’ve paid${isT ? ', and confirm payments' : ''}.</p><button type="button" class="btn sm" data-act="unlink" data-id="${esc(m.id)}">Unlink account</button></div>`
-      : `<div class="note"><p><b>Not joined yet.</b> ${m.inviteExpires ? 'Their invite link is open until ' + fmtTs(m.inviteExpires) + '. Make a new one if it got lost.' : 'Send an invite link so they can log in' + (isT ? ' and confirm payments.' : ' and see what they’ve paid.')}</p><button type="button" class="btn primary sm" data-act="invite" data-id="${esc(m.id)}">${ICON.link}${m.inviteExpires ? 'New invite link' : 'Create invite link'}</button></div>`;
+      ? `<div class="note note--info"><p><b>${m.accountName ? 'Joined as ' + esc(stop(m.accountName)) : 'Joined.'}</b> They can log in and see what they’ve paid${isT ? ', and confirm payments' : ''}.</p><button type="button" class="btn btn--sm" data-act="unlink" data-id="${esc(m.id)}">Unlink account</button></div>`
+      : `<div class="note"><p><b>Not joined yet.</b> ${m.inviteExpires ? 'Their invite link is open until ' + fmtTs(m.inviteExpires) + '. Make a new one if it got lost.' : 'Send an invite link so they can log in' + (isT ? ' and confirm payments.' : ' and see what they’ve paid.')}</p><button type="button" class="btn btn--primary btn--sm" data-act="invite" data-id="${esc(m.id)}">${ICON.link}${m.inviteExpires ? 'New invite link' : 'Create invite link'}</button></div>`;
   let treas = '';
   if (!isT) {
-    treas = S.treasAsk === m.id
-      ? `<div class="confirm"><p><b>Make ${esc(m.name)} the treasurer?</b> ${d.role === 'treasurer' ? 'You’ll stop being able to confirm payments. ' : ''}${m.linked ? esc(firstName(m.name)) + ' takes over straight away.' : esc(firstName(m.name)) + ' takes over once they’ve joined with their invite link.'}</p><div class="actions end"><button type="button" class="btn sm" data-act="cancelTreasurer">Cancel</button><button type="button" class="btn sm primary" data-act="doTreasurer" data-id="${esc(m.id)}">Make treasurer</button></div></div>`
-      : `<button type="button" class="btn" data-act="askTreasurer" data-id="${esc(m.id)}">Make ${esc(firstName(m.name))} the treasurer</button>`;
+    if (S.treasAsk === m.id) {
+      const ask = isMe
+        ? '<b>Make yourself the treasurer?</b> You’ll confirm everyone’s payments from now on.'
+        : `<b>Make ${esc(m.name)} the treasurer?</b> ${d.role === 'treasurer' ? 'You’ll stop being able to confirm payments. ' : ''}${esc(firstName(m.name))} ${m.linked ? 'takes over straight away.' : 'takes over once they’ve joined with their invite link.'}`;
+      treas = `<div class="confirm-box"><p>${ask}</p><div class="actions actions--end"><button type="button" class="btn btn--sm" data-act="cancelTreasurer" data-first>Cancel</button><button type="button" class="btn btn--sm btn--primary" data-act="doTreasurer" data-id="${esc(m.id)}">Make treasurer</button></div></div>`;
+    } else {
+      treas = `<button type="button" class="btn" data-act="askTreasurer" data-id="${esc(m.id)}">${isMe ? 'Make me the treasurer' : 'Make ' + esc(firstName(m.name)) + ' the treasurer'}</button>`;
+    }
   }
+  // Nobody removes themselves: it would take the stokvel off their own home screen.
   let remove = '';
   if (isT) remove = `<p class="fineprint">To remove the treasurer, make someone else treasurer first.</p>`;
-  else if (S.memAsk === m.id) remove = `<div class="confirm"><p><b>Remove ${esc(m.name)}?</b> If they have payments or meetings on record, those stay in the record and they stop paying from this month. Otherwise they’re removed completely.</p><div class="actions end"><button type="button" class="btn sm" data-act="cancelRemove">Keep</button><button type="button" class="btn sm danger" data-act="doRemove" data-id="${esc(m.id)}">Remove</button></div></div>`;
-  else remove = `<button type="button" class="btn danger" data-act="askRemove" data-id="${esc(m.id)}">${ICON.trash}Remove from the stokvel</button>`;
-  return `<div class="sheethead"><div><button type="button" class="back" data-act="membersBack">${ICON.left}Members</button><h3 id="sheetTitle">${esc(m.name)}</h3><p>${isT ? 'Treasurer · confirms payments' : esc(m.title || 'Member')}</p></div>${closeBtn}</div>
+  else if (isMe) remove = '';
+  else if (S.memAsk === m.id) remove = `<div class="confirm-box"><p><b>Remove ${esc(m.name)}?</b> If they have payments or meetings on record, those stay in the record and they stop paying from this month. Otherwise they’re removed completely.</p><div class="actions actions--end"><button type="button" class="btn btn--sm" data-act="cancelRemove" data-first>Keep</button><button type="button" class="btn btn--sm btn--danger" data-act="doRemove" data-id="${esc(m.id)}">Remove</button></div></div>`;
+  else remove = `<button type="button" class="btn btn--danger" data-act="askRemove" data-id="${esc(m.id)}">${ICON.trash}Remove from the stokvel</button>`;
+  return `<div class="sheet-head"><div><button type="button" class="back-btn" data-act="membersBack">${ICON.left}Members</button><h2 id="sheetTitle">${esc(m.name)}</h2><p>${isT ? 'Treasurer · confirms payments' : esc(m.title || 'Member')}</p></div>${closeBtn}</div>
     <form class="form" id="memberForm" data-id="${esc(m.id)}" novalidate>
-      <div class="two"><label class="field" for="mName"><span class="lab">Name</span><input id="mName" value="${esc(m.name)}" maxlength="60" autocomplete="off"></label>
-      <label class="field" for="mTitle"><span class="lab">Role</span><select id="mTitle"><option value="">Member</option>${TITLES.map(t => `<option${m.title === t ? ' selected' : ''}>${t}</option>`).join('')}</select></label></div>
-      <p class="formerr" id="memErr" role="alert" hidden></p>
-      <button type="submit" class="btn">Save changes</button>
+      <div class="field-row">
+        ${field('mName', 'Name', `<input id="mName" value="${esc(m.name)}" maxlength="60" autocomplete="off">`)}
+        ${field('mTitle', 'Role', `<select id="mTitle"><option value="">Member</option>${TITLES.map(t => `<option${m.title === t ? ' selected' : ''}>${t}</option>`).join('')}</select>`)}
+      </div>
+      <p class="form-error" id="memErr" role="alert" hidden></p>
+      <button type="submit" class="btn" id="memSave">Save changes</button>
     </form>
     ${account}${treas}${remove}`;
 }
@@ -1138,9 +1237,9 @@ function inviteSheetHTML(inv) {
   const msg = inv.isTreasurer
     ? `Hi ${first}, you’re the treasurer of ${inv.stokvelName} on our stokvel app. Open this link to set up your login, then you can confirm everyone’s payments: ${inv.url}`
     : `Hi ${first}, here’s your link to the ${inv.stokvelName} stokvel book. Open it to set up your login and see what you’ve paid: ${inv.url}`;
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Invite ${esc(first)}</h3><p>The link works once and stays open until ${fmtTs(inv.expiresAt)}.</p></div>${closeBtn}</div>
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Invite ${esc(first)}</h2><p>The link works once and stays open until ${fmtTs(inv.expiresAt)}.</p></div>${closeBtn}</div>
     <pre class="bubble" id="inviteMsg">${esc(msg)}</pre>
-    <div class="actions"><button type="button" class="btn" data-act="copy" data-src="inviteMsg" data-first>${ICON.copy}Copy message</button><a class="btn primary" href="${esc(waLink(msg))}" target="_blank" rel="noopener">${ICON.chat}Send on WhatsApp</a></div>
+    <div class="actions"><button type="button" class="btn" data-act="copy" data-src="inviteMsg" data-first>${ICON.copy}Copy message</button><a class="btn btn--primary" href="${esc(waLink(msg))}" target="_blank" rel="noopener">${ICON.chat}Send on WhatsApp</a></div>
     <p class="fineprint">Only send this to ${esc(first)}. Anyone who has the link can join this stokvel as ${esc(stop(inv.memberName))}</p>`;
 }
 async function createInvite(id) {
@@ -1153,21 +1252,22 @@ async function createInvite(id) {
   } catch (e) { handleError(e); }
   finally { bump(-1); }
 }
-function settingsFields(st, isNew) {
-  const kindOpt = (v, title, desc) => `<label class="kind" for="fKind-${v}"><input type="radio" name="fKind" id="fKind-${v}" value="${v}"${st.kind === v ? ' checked' : ''}><span><b>${title}</b><small>${desc}</small></span></label>`;
-  return `<label class="field" for="fName"><span class="lab">Stokvel name</span><input id="fName" maxlength="60" autocomplete="off" value="${esc(st.name || '')}" placeholder="Kopanang Savings Club"></label>
-    <fieldset class="field kinds"><legend class="lab">How it works</legend>${kindOpt('fund', 'Group fund', 'Everyone pays into one fund, to save or invest together.')}${kindOpt('rotating', 'Rotating payout', 'Each month one member takes the whole pot.')}</fieldset>
-    <div class="two">
-      <label class="field" for="fAmt"><span class="lab">Each member pays</span><span class="money"><i>R</i><input id="fAmt" inputmode="numeric" autocomplete="off" value="${st.amount || ''}" placeholder="500"></span></label>
-      <label class="field" for="fDay"><span class="lab">Due on day</span><input id="fDay" inputmode="numeric" autocomplete="off" value="${st.payDay || 25}"></label>
+function settingsFields(st) {
+  const kindOpt = (v, title, desc) => `<label class="choice" for="fKind-${v}"><input type="radio" name="fKind" id="fKind-${v}" value="${v}"${st.kind === v ? ' checked' : ''}><span><b>${title}</b><small>${desc}</small></span></label>`;
+  const money = (id, value, placeholder) => `<span class="money-input"><i>R</i><input id="${id}" inputmode="numeric" autocomplete="off" value="${value}"${placeholder ? ` placeholder="${placeholder}"` : ''}></span>`;
+  return `${field('fName', 'Stokvel name', `<input id="fName" maxlength="60" autocomplete="off" value="${esc(st.name || '')}" placeholder="Kopanang Savings Club">`)}
+    <fieldset class="field choice-group"><legend class="field-label">How it works</legend>${kindOpt('fund', 'Group fund', 'Everyone pays into one fund, to save or invest together.')}${kindOpt('rotating', 'Rotating payout', 'Each month one member takes the whole pot.')}</fieldset>
+    <div class="field-row">
+      ${field('fAmt', 'Each member pays', money('fAmt', st.amount || '', '500'))}
+      ${field('fDay', 'Due on day', `<input id="fDay" inputmode="numeric" autocomplete="off" value="${st.payDay || 25}">`)}
     </div>
-    <div class="two">
-      <label class="field" for="fStart"><span class="lab">First month</span><input id="fStart" type="month" value="${esc(st.startMonth || todayKey())}"></label>
-      <label class="field fund-only" for="fMonths"${st.kind === 'fund' ? '' : ' hidden'}><span class="lab">Months of paying in</span><input id="fMonths" inputmode="numeric" autocomplete="off" value="${st.months || 12}"></label>
+    <div class="field-row">
+      ${field('fStart', 'First month', `<input id="fStart" type="month" value="${esc(st.startMonth || todayKey())}">`)}
+      <label class="field fund-only" for="fMonths"${st.kind === 'fund' ? '' : ' hidden'}><span class="field-label">Months of paying in</span><input id="fMonths" inputmode="numeric" autocomplete="off" value="${st.months || 12}"></label>
     </div>
-    <label class="field" for="fFine"><span class="lab">Late fine</span><span class="money"><i>R</i><input id="fFine" inputmode="numeric" autocomplete="off" value="${st.lateFine || 0}"></span></label>
+    ${field('fFine', 'Late fine', money('fFine', st.lateFine || 0))}
     <label class="toggle" for="fMeet"><span><b>We hold meetings</b><small>Take a register each month and see who missed.</small></span><input type="checkbox" id="fMeet"${st.meetings ? ' checked' : ''}></label>
-    <label class="field meet-only" for="fMeetFine"${st.meetings ? '' : ' hidden'}><span class="lab">Missed-meeting fine</span><span class="money"><i>R</i><input id="fMeetFine" inputmode="numeric" autocomplete="off" value="${st.meetFine || 0}"></span></label>`;
+    <label class="field meet-only" for="fMeetFine"${st.meetings ? '' : ' hidden'}><span class="field-label">Missed-meeting fine</span>${money('fMeetFine', st.meetFine || 0)}</label>`;
 }
 function readSettingsForm() {
   const picked = $('input[name="fKind"]:checked');
@@ -1180,27 +1280,27 @@ function readSettingsForm() {
 }
 function settingsSheetHTML() {
   const st = S.d.st;
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Stokvel settings</h3><p>Changes show for everyone in ${esc(st.name)}.</p></div>${closeBtn}</div>
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Stokvel settings</h2><p>Changes show for everyone in ${esc(st.name)}.</p></div>${closeBtn}</div>
     <form id="settingsForm" class="form" novalidate>
-      ${settingsFields(st, false)}
-      <p class="formerr" id="formErr" role="alert" hidden></p>
-      <div class="actions end"><button type="button" class="btn" data-act="close">Cancel</button><button type="submit" class="btn primary" id="formSubmit">Save changes</button></div>
+      ${settingsFields(st)}
+      <p class="form-error" id="formErr" role="alert" hidden></p>
+      <div class="actions actions--end"><button type="button" class="btn" data-act="close">Cancel</button><button type="submit" class="btn btn--primary" id="formSubmit">Save changes</button></div>
     </form>
     <div class="danger-zone"><p><b>Delete this stokvel.</b> This removes its members, payments and meetings for everyone. It can’t be undone. Type the stokvel’s name to confirm.</p>
-      <form id="deleteForm" class="addrow" novalidate><input id="delConfirm" placeholder="${esc(st.name)}" autocomplete="off" aria-label="Type the stokvel’s name to confirm"><button type="submit" class="btn danger">Delete</button></form>
-      <p class="formerr" id="delErr" role="alert" hidden></p></div>`;
+      <form id="deleteForm" class="input-row" novalidate><input id="delConfirm" placeholder="${esc(st.name)}" autocomplete="off" aria-label="Type the stokvel’s name to confirm"><button type="submit" class="btn btn--danger" id="delSubmit">Delete</button></form>
+      <p class="form-error" id="delErr" role="alert" hidden></p></div>`;
 }
 function createSheetHTML() {
   const u = S.session.user;
   const base = { name: '', kind: 'fund', amount: '', payDay: 25, startMonth: todayKey(), months: 12, lateFine: 0, meetings: true, meetFine: 0 };
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Start a stokvel</h3><p>You can change any of this later, and add or remove members any time.</p></div>${closeBtn}</div>
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Start a stokvel</h2><p>You can change any of this later, and add or remove members any time.</p></div>${closeBtn}</div>
     <form id="createForm" class="form" novalidate>
-      ${settingsFields(base, true)}
-      <label class="field" for="fMe"><span class="lab">Your name in this stokvel</span><input id="fMe" maxlength="60" autocomplete="name" value="${esc(u.name)}"></label>
-      <label class="field" for="fMembers"><span class="lab">Other members</span><textarea id="fMembers" rows="6" placeholder="One name per line"></textarea><small>${'The order you type is the payout order for a rotating stokvel. You can draw lots for it later.'}</small></label>
-      <label class="field" for="fTreasurer"><span class="lab">Treasurer</span><select id="fTreasurer"></select><small id="fTreasurerHint">The treasurer confirms everyone’s payments.</small></label>
-      <p class="formerr" id="formErr" role="alert" hidden></p>
-      <div class="actions end"><button type="button" class="btn" data-act="close">Cancel</button><button type="submit" class="btn primary" id="formSubmit">Create the stokvel</button></div>
+      ${settingsFields(base)}
+      ${field('fMe', 'Your name in this stokvel', `<input id="fMe" maxlength="60" autocomplete="name" value="${esc(u.name)}">`)}
+      ${field('fMembers', 'Other members', '<textarea id="fMembers" rows="6" placeholder="One name per line"></textarea>', 'The order you type is the payout order for a rotating stokvel. You can draw lots for it later.')}
+      <label class="field" for="fTreasurer"><span class="field-label">Treasurer</span><select id="fTreasurer"></select><small id="fTreasurerHint">The treasurer confirms everyone’s payments.</small></label>
+      <p class="form-error" id="formErr" role="alert" hidden></p>
+      <div class="actions actions--end"><button type="button" class="btn" data-act="close">Cancel</button><button type="submit" class="btn btn--primary" id="formSubmit">Create the stokvel</button></div>
     </form>`;
 }
 function createNames() {
@@ -1219,16 +1319,21 @@ function paintTreasurerOptions() {
 }
 function accountSheetHTML() {
   const u = S.session.user;
-  return `<div class="sheethead"><div><h3 id="sheetTitle">Your account</h3><p>You log in with ${esc(u.phone)}.</p></div>${closeBtn}</div>
-    <form id="accountForm" class="form" novalidate><label class="field" for="acName"><span class="lab">Your name</span><input id="acName" value="${esc(u.name)}" maxlength="60" autocomplete="name"></label><button type="submit" class="btn">Save name</button></form>
-    <hr class="split">
-    <form id="passwordForm" class="form" novalidate><span class="lab">Change password</span>
-      <input id="pwOld" type="password" placeholder="Current password" autocomplete="current-password" aria-label="Current password">
-      <input id="pwNew" type="password" placeholder="New password (at least 6 characters)" autocomplete="new-password" aria-label="New password">
-      <p class="formerr" id="pwErr" role="alert" hidden></p>
-      <button type="submit" class="btn">Change password</button></form>
-    <hr class="split">
-    <button type="button" class="btn danger" data-act="logout">Log out</button>`;
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">Your account</h2><p>You log in with ${esc(u.phone)}.</p></div>${closeBtn}</div>
+    <form id="accountForm" class="form" novalidate>
+      ${field('acName', 'Your name', `<input id="acName" value="${esc(u.name)}" maxlength="60" autocomplete="name">`)}
+      <p class="form-error" id="acErr" role="alert" hidden></p>
+      <button type="submit" class="btn" id="acSave">Save name</button>
+    </form>
+    <hr class="divider">
+    <form id="passwordForm" class="form" novalidate>
+      ${field('pwOld', 'Current password', '<input id="pwOld" type="password" autocomplete="current-password">')}
+      ${field('pwNew', 'New password', '<input id="pwNew" type="password" autocomplete="new-password">', 'At least 6 characters. Other devices will be logged out.')}
+      <p class="form-error" id="pwErr" role="alert" hidden></p>
+      <button type="submit" class="btn" id="pwSave">Change password</button>
+    </form>
+    <hr class="divider">
+    <button type="button" class="btn btn--danger" data-act="logout">Log out</button>`;
 }
 
 /* ---------- forms ---------- */
@@ -1261,8 +1366,8 @@ async function submitForm(form) {
     } catch (e) {
       done();
       if (e.code === 'already_member') { S.session = await api('GET', 'session').catch(() => S.session); toast(e.message); go('/', true); return; }
-      if (e.code === 'phone_taken') S.joinMode = 'login';
-      if (e.code === 'phone_taken') { render(); }
+      // The number already has an account: switch to logging in, keeping what was typed.
+      if (e.code === 'phone_taken') { S.joinMode = 'login'; render(); }
       formError('formErr', e.message);
     }
   } else if (id === 'createForm') {
@@ -1290,33 +1395,39 @@ async function submitForm(form) {
   } else if (id === 'deleteForm') {
     const name = $('#delConfirm').value;
     if (name.trim().toLowerCase() !== S.d.st.name.trim().toLowerCase()) return formError('delErr', 'Type ' + S.d.st.name + ' exactly to confirm.');
+    const done = busyButton('delSubmit', 'Deleting…');
     try {
       await api('DELETE', 'stokvels/' + S.d.st.id, { confirm: name });
       const gone = S.d.st.name;
       closeSheet(true); S.d = null; S.dId = null;
       go('/', true);
       toast('Deleted ' + gone);
-    } catch (e) { formError('delErr', e.message); }
+    } catch (e) { done(); formError('delErr', e.message); }
   } else if (id === 'addForm') {
     const name = $('#newMember').value.trim();
     if (!name) return formError('memErr', 'Type the new member’s name first.');
     const r = await memberCall('POST', 'members', { name }, 'Added ' + name);
     if (r) { refreshSheet(); const inp = $('#newMember'); if (inp) inp.focus(); }
   } else if (id === 'memberForm') {
-    const mid = form.dataset.id;
-    const r = await memberCall('PATCH', 'members/' + mid, { name: $('#mName').value, title: $('#mTitle').value }, 'Saved');
+    const done = busyButton('memSave', 'Saving…');
+    const r = await memberCall('PATCH', 'members/' + form.dataset.id, { name: $('#mName').value, title: $('#mTitle').value }, 'Saved');
+    done();
     if (r) refreshSheet();
+  } else if (id === 'partForm') {
+    await setPartAction(form.dataset.id);
   } else if (id === 'accountForm') {
+    const done = busyButton('acSave', 'Saving…');
     try {
       const r = await api('PATCH', 'account', { name: $('#acName').value });
       S.session.user = r.user;
       closeSheet(); render(); toast('Saved');
-    } catch (e) { handleError(e); }
+    } catch (e) { done(); if (e.status === 401) handleError(e); else formError('acErr', e.message); }
   } else if (id === 'passwordForm') {
+    const done = busyButton('pwSave', 'Changing…');
     try {
       await api('PATCH', 'account', { currentPassword: $('#pwOld').value, newPassword: $('#pwNew').value });
       closeSheet(); toast('Password changed. Other devices have been logged out.');
-    } catch (e) { formError('pwErr', e.message); }
+    } catch (e) { done(); if (e.status === 401) handleError(e); else formError('pwErr', e.message); }
   }
 }
 
@@ -1338,6 +1449,11 @@ function copyFrom(id) {
 document.addEventListener('click', ev => {
   const el = ev.target.closest('[data-act],[data-tab]');
   if (!el || el.disabled) return;
+  if (el.tagName === 'A') {
+    // Links still open in a new tab or window when asked to; a plain click stays in the app.
+    if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+  }
   if (el.dataset.tab) {
     S.tab = el.dataset.tab;
     store.set('tab', S.tab);
@@ -1351,9 +1467,12 @@ document.addEventListener('click', ev => {
     case 'home': go('/'); break;
     case 'openStokvel': go('/s/' + id); break;
     case 'account': openSheet('account', accountSheetHTML); break;
-    case 'logout':
-      api('POST', 'logout').catch(() => {}).finally(() => { closeSheet(true); S.session.user = null; S.list = null; S.d = null; S.dId = null; go('/', true); });
+    case 'logout': {
+      // Logging out from an invite stays on the invite, so someone else can join with it.
+      const back = S.route.name === 'join' ? location.pathname : '/';
+      api('POST', 'logout').catch(() => {}).finally(() => { closeSheet(true); S.session.user = null; S.list = null; S.d = null; S.dId = null; go(back, true); });
       break;
+    }
     case 'create': openSheet('create', createSheetHTML); paintTreasurerOptions(); break;
     case 'joinMode': S.joinMode = el.dataset.mode === 'login' ? 'login' : 'new'; render(); break;
     case 'joinAccept': {
@@ -1373,15 +1492,14 @@ document.addEventListener('click', ev => {
     case 'quick': quickStamp(id); break;
     case 'mark': openSheet('mark', () => markSheetHTML(id)); break;
     case 'setmark': setMarkAction(id, el.dataset.s); break;
-    case 'setpart': setPartAction(id); break;
     case 'setatt': setAtt(id, el.dataset.a); break;
     case 'register': openRegister(); break;
-    case 'regSet': if (S.reg) { S.reg.att[id] = S.reg.att[id] === el.dataset.a ? null : el.dataset.a; for (const b of $$('#sheet [data-act="regSet"]')) b.setAttribute('aria-checked', String(S.reg.att[b.dataset.id] === b.dataset.a)); } break;
-    case 'regAll': if (S.reg) { for (const k of Object.keys(S.reg.att)) if (!S.reg.att[k]) S.reg.att[k] = 'present'; for (const b of $$('#sheet [data-act="regSet"]')) b.setAttribute('aria-checked', String(S.reg.att[b.dataset.id] === b.dataset.a)); } break;
+    case 'regSet': if (S.reg) { S.reg.att[id] = S.reg.att[id] === el.dataset.a ? null : el.dataset.a; paintRegister(); } break;
+    case 'regAll': if (S.reg) { for (const k of Object.keys(S.reg.att)) if (!S.reg.att[k]) S.reg.att[k] = 'present'; paintRegister(); } break;
     case 'regSave': saveRegister(); break;
-    case 'payout': setPayout(el.dataset.k, true); break;
+    case 'payout': setPayout(d.st.id, el.dataset.k, true); break;
     case 'payoutSheet': openSheet('payout', () => payoutSheetHTML(el.dataset.k)); break;
-    case 'clearPayout': closeSheet(); setPayout(el.dataset.k, false); break;
+    case 'clearPayout': closeSheet(); setPayout(d.st.id, el.dataset.k, false); break;
     case 'up': moveTurn(id, -1); break;
     case 'down': moveTurn(id, 1); break;
     case 'draw': openDraw(); break;
@@ -1408,6 +1526,7 @@ document.addEventListener('click', ev => {
       // Make the invite link first, while this person can still manage the stokvel.
       const m = findMember(d, id);
       if (!m) break;
+      const isMe = !!d.me && d.me.memberId === id;
       bump(1);
       (async () => {
         try {
@@ -1416,7 +1535,7 @@ document.addEventListener('click', ev => {
           closeSheet(true);
           await loadStokvel(d.st.id, true);
           if (inv) openSheet('invite', () => inviteSheetHTML({ ...inv, isTreasurer: true }));
-          else toast(m.name + ' is now the treasurer');
+          else toast(isMe ? 'You’re now the treasurer' : m.name + ' is now the treasurer');
         } catch (e) { handleError(e); }
         finally { bump(-1); }
       })();
@@ -1426,14 +1545,25 @@ document.addEventListener('click', ev => {
     case 'settings': openSheet('settings', settingsSheetHTML); break;
   }
 });
-document.addEventListener('submit', ev => { ev.preventDefault(); submitForm(ev.target); });
+document.addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const form = ev.target;
+  if (form.dataset.busy) return;   // ignore a second Enter while the first is saving
+  form.dataset.busy = '1';
+  try { await submitForm(form); } finally { delete form.dataset.busy; }
+});
 document.addEventListener('change', ev => {
   const t = ev.target;
   if (t.name === 'fKind') $$('.fund-only').forEach(e => { e.hidden = t.value !== 'fund'; });
   if (t.id === 'fMeet') $$('.meet-only').forEach(e => { e.hidden = !t.checked; });
   if (t.id === 'fTreasurer') paintTreasurerOptions();
 });
-document.addEventListener('input', ev => { if (ev.target.id === 'fMembers' || ev.target.id === 'fMe') paintTreasurerOptions(); });
+document.addEventListener('input', ev => {
+  const t = ev.target;
+  if (t.id === 'fMembers' || t.id === 'fMe') paintTreasurerOptions();
+  else if (t.id === 'jnName') S.joinDraft.name = t.value;
+  else if (t.id === 'jnPhone') S.joinDraft.phone = t.value;
+});
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && S.sheet) closeSheet(); });
 
 // See other people's changes when coming back to the app.

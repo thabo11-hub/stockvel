@@ -1,0 +1,10 @@
+/* ==========================================================================
+   Utilities
+   Single-purpose helpers, loaded last. They use !important on purpose: a
+   utility in the markup should always win over a component's own colour.
+   ========================================================================== */
+
+.text-bad { color: var(--late) !important; }      /* owing, late, absent */
+.text-warn { color: var(--part) !important; }     /* part payment, apology, waiting */
+.text-good { color: var(--paid) !important; }     /* confirmed */
+.text-accent { color: var(--pen) !important; font-weight: 650; }
