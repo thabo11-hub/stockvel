@@ -8,3 +8,13 @@
 .text-warn { color: var(--part) !important; }     /* part payment, apology, waiting */
 .text-good { color: var(--paid) !important; }     /* confirmed */
 .text-accent { color: var(--pen) !important; font-weight: 650; }
+
+/* Hidden on screen but still there for keyboards and screen readers (e.g. a styled file picker). */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+}

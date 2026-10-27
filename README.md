@@ -3,6 +3,7 @@
 A shared contributions book for stokvels. One login, many stokvels: each stokvel you belong to gets its own dashboard.
 
 - **The treasurer confirms payments.** In each stokvel one member is the treasurer. Only they can confirm who paid (in full, late or in part), take the meeting register, stamp payouts, and add or remove members.
+- **Every confirmation records the amount and the date it was paid.** The treasurer can also attach a proof of payment: a photo of the slip or a PDF of up to 3 MB. Photos are shrunk on the phone before they upload. Proofs are stored privately in the database, and only the treasurer and the member who paid can open them.
 - **Members see their own record.** Everyone else sees what they have paid, the group's total, the meeting attendance (for stokvels that hold meetings), and their turn for the pot (for rotating stokvels). They don't see other members' individual payments.
 - **The server enforces this.** Roles are checked by the API on every request, not just hidden in the page.
 - **People join with an invite link.** The treasurer creates a one-time link for each member and sends it on WhatsApp. The member sets a password, and from then on logs in with their phone number.
@@ -70,4 +71,5 @@ Security notes:
 - Changes need a same-origin request with an app header.
 - Repeated wrong passwords lock a phone number for 15 minutes.
 - Invite links are single-use and expire after 14 days.
+- Proof-of-payment files are checked by their contents (JPEG, PNG, WebP or PDF only) and are only served to the treasurer and the member they belong to.
 - Pages are served with a Content Security Policy that only allows the app's own scripts, so injected script can't run.

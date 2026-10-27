@@ -27,13 +27,14 @@ const types = {
 };
 
 // Send the same security headers as production (vercel.json), so problems show up locally first.
+// The sources used there ("/(.*)", "/((?!api/).*)") are also valid regular expressions.
 const config = JSON.parse(await readFile(path.join(here, '..', 'vercel.json'), 'utf8'));
-const headers = (config.headers || []).filter(h => h.source === '/(.*)').flatMap(h => h.headers);
+const headerRules = (config.headers || []).map(h => ({ re: new RegExp('^' + h.source + '$'), headers: h.headers }));
 
 const port = Number(process.env.PORT || 3000);
 http.createServer(async (req, res) => {
-  for (const h of headers) res.setHeader(h.key, h.value);
   const url = new URL(req.url, 'http://localhost');
+  for (const rule of headerRules) if (rule.re.test(url.pathname)) for (const h of rule.headers) res.setHeader(h.key, h.value);
   if (url.pathname.startsWith('/api/')) return handler(req, res);
   let file;
   try { file = path.join(root, decodeURIComponent(url.pathname)); }

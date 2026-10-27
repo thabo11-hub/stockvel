@@ -21,6 +21,10 @@ const fmtDate = d => d.getDate() + ' ' + MON3[d.getMonth()];
 const fmtTs = ts => { const d = new Date(ts); return isNaN(d.getTime()) ? '' : fmtDate(d); };
 const fmtDay = s => { if (!DATE_RE.test(s || '')) return ''; const [y, m, d] = s.split('-').map(Number); return DAY3[new Date(y, m - 1, d).getDay()] + ' ' + d + ' ' + MON3[m - 1]; };
 // Rand with a non-breaking space between thousands (R1 100), so an amount never splits over two lines.
+// "24 Oct" from an ISO date such as 2026-10-24.
+const fmtISO = s => { if (!DATE_RE.test(s || '')) return ''; const [, m, d] = s.split('-').map(Number); return d + ' ' + MON3[m - 1]; };
+const validDate = s => { if (!DATE_RE.test(s || '')) return false; const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d).getDate() === d; };
+const fmtSize = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 const fmtR = n => 'R' + String(Math.max(0, Math.round(Number(n) || 0))).replace(/\B(?=(\d{3})+(?!\d))/g, '\u00a0');
 // Reads whole rand from what someone typed: "1 100", "R1,100", "550.00" or "1.100,50".
 // Cents are dropped, so a typed decimal point can never turn R550.00 into R55 000.
@@ -59,12 +63,19 @@ const ICON = {
   copy: svg('<rect x="8.5" y="8.5" width="12" height="12" rx="2.2"/><path d="M15.5 8.5V5.7a2.2 2.2 0 0 0-2.2-2.2H5.7a2.2 2.2 0 0 0-2.2 2.2v7.6a2.2 2.2 0 0 0 2.2 2.2h2.8"/>'),
   chat: svg('<path d="M4.5 19.5 6 15.6A7.9 7.9 0 1 1 9 18.4z"/>'),
   shuffle: svg('<path d="M16 3.5h4.5V8M3.5 20.5l17-17M20.5 16v4.5H16M14.5 14.5l6 6M3.5 3.5l5 5"/>'),
+  clip: svg('<path d="M20.5 11.5 12 20a5.3 5.3 0 0 1-7.5-7.5l8.7-8.7a3.5 3.5 0 0 1 5 5l-8.5 8.5a1.8 1.8 0 0 1-2.5-2.5l7.8-7.8"/>'),
+  file: svg('<path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5M8.5 13h7M8.5 16.5h5"/>'),
+  eye: svg('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3"/>'),
+  eyeOff: svg('<path d="M3.5 3.5l17 17"/><path d="M10.6 5.6A9 9 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16.6 16.6 0 0 1-3.1 3.9"/><path d="M6.7 6.8C4 8.5 2.5 12 2.5 12S6 18.5 12 18.5a8.8 8.8 0 0 0 4.3-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>'),
 };
 const closeBtn = `<button type="button" class="icon-btn" data-act="close" aria-label="Close">${ICON.close}</button>`;
 const backLink = () => `<a class="back-btn" href="/" data-act="home">${ICON.left}My stokvels</a>`;
 // A labelled form field. `input` is the control's HTML; `help` is optional small print under it.
 const field = (id, label, input, help) => `<label class="field" for="${id}"><span class="field-label">${label}</span>${input}${help ? `<small>${help}</small>` : ''}</label>`;
 const phoneInput = (id, value) => `<input id="${id}" type="tel" inputmode="tel" autocomplete="tel" placeholder="082 123 4567" value="${esc(value || '')}">`;
+// A password box with a show/hide button. The button sits beside the <label>, because a label may only hold its own control.
+const passwordField = (id, label, autocomplete, help) => `<div class="field"><label class="field-label" for="${id}">${label}</label>
+  <span class="password-input"><input id="${id}" type="password" autocomplete="${autocomplete}"><button type="button" class="reveal" data-act="reveal" data-for="${id}" aria-label="Show password" aria-pressed="false">${ICON.eye}</button></span>${help ? `<small>${help}</small>` : ''}</div>`;
 
 /* ---------- state ---------- */
 const S = {
@@ -76,7 +87,7 @@ const S = {
   tab: 'month', monthKey: null, recView: 'pay', tone: 'warm',
   pending: 0, justStamped: null,
   sheet: null, sheetRender: null, lastFocus: null, lastFocusAt: null,
-  reg: null, draw: null, memView: null, memAsk: null, treasAsk: null,
+  reg: null, draw: null, memView: null, memAsk: null, treasAsk: null, pay: null,
 };
 const store = {
   get(k) { try { return localStorage.getItem('stokvel.' + k); } catch (e) { return null; } },
@@ -188,7 +199,7 @@ async function loadInvite(token) {
 
 function normalize(r) {
   const marks = {}, meetings = {}, payouts = {};
-  for (const c of r.contributions) (marks[c.month] = marks[c.month] || {})[c.memberId] = { status: c.status, amount: c.amount, at: c.at, by: c.byName };
+  for (const c of r.contributions) (marks[c.month] = marks[c.month] || {})[c.memberId] = { status: c.status, amount: c.amount, at: c.at, by: c.byName, paidOn: c.paidOn || '', proof: c.proof || null };
   for (const m of r.meetings) meetings[m.month] = { date: m.heldOn, att: m.attendance || {} };
   for (const p of r.payouts) payouts[p.month] = { at: p.at, by: p.byName };
   return {
@@ -319,7 +330,8 @@ function reminderText(d, k, tone) {
 function describe(a) {
   const x = a.detail || {}, who = a.byName || 'Someone', mon = x.month ? monthName(x.month) : '';
   switch (a.action) {
-    case 'confirmed': return `${who} confirmed ${x.member} for ${mon}` + (x.status === 'late' ? ' (late)' : x.status === 'part' ? ` (${fmtR(x.amount)} part)` : '');
+    case 'confirmed': return `${who} confirmed ${x.member} for ${mon}` + (x.status === 'late' ? ' (late)' : x.status === 'part' ? ` (${fmtR(x.amount)} part)` : '')
+      + (x.paidOn ? `, paid ${fmtISO(x.paidOn)}` : '') + (x.proof === 'added' ? ', with proof' : x.proof === 'removed' ? ', proof removed' : '');
     case 'cleared': return `${who} cleared ${x.member}’s ${mon} payment`;
     case 'register': return `${who} saved the ${mon} meeting register`;
     case 'payout': return `${who} marked the ${mon} payout as paid`;
@@ -345,6 +357,10 @@ function stampHTML(kind, top, bottom, seed, pressed) {
 }
 const miniStamp = s => `<span class="mini-stamp ${s}">${s === 'part' ? 'Part' : s === 'late' ? 'Late' : 'Paid'}</span>`;
 const nameTag = (text, accent) => ` <em class="tag${accent ? ' tag--accent' : ''}">${text}</em>`;
+// The day a confirmed payment was made: the date the treasurer entered, or for older records the day it was confirmed.
+const paidDate = mk => fmtISO(mk.paidOn) || fmtTs(mk.at);
+const proofTag = () => `<span class="proof-tag">${ICON.clip}Proof</span>`;
+const proofUrl = (sid, memberId, k, p) => `/api/stokvels/${sid}/proofs/${memberId}/${k}?v=${encodeURIComponent((p && p.at) || '')}`;
 const names = list => list.map(m => esc(m.name)).join(', ');
 const syncHTML = () => `<span class="sync" id="sync"${S.pending ? '' : ' hidden'}><i></i>Saving…</span>`;
 function monthBar(keys, k) {
@@ -384,7 +400,7 @@ function setupHTML() {
     ${field('suCode', 'Setup code', '<input id="suCode" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX">')}
     ${field('suName', 'Your name', '<input id="suName" autocomplete="name" maxlength="60">')}
     ${field('suPhone', 'Phone number', phoneInput('suPhone'))}
-    ${field('suPass', 'Password', '<input id="suPass" type="password" autocomplete="new-password">', 'At least 6 characters.')}
+    ${passwordField('suPass', 'Password', 'new-password', 'At least 6 characters.')}
     <p class="form-error" id="formErr" role="alert" hidden></p>
     <button type="submit" class="btn btn--primary" id="formSubmit">Create my account</button>
   </form></section>`;
@@ -394,7 +410,7 @@ function loginHTML() {
     <h1 class="tape">Stokvel</h1>
     <p class="lead">Log in with your phone number to see your stokvels.</p>
     ${field('liPhone', 'Phone number', phoneInput('liPhone'))}
-    ${field('liPass', 'Password', '<input id="liPass" type="password" autocomplete="current-password">')}
+    ${passwordField('liPass', 'Password', 'current-password')}
     <p class="form-error" id="formErr" role="alert" hidden></p>
     <button type="submit" class="btn btn--primary" id="formSubmit">Log in</button>
   </form><p class="auth-foot">New here? Ask your treasurer to send you an invite link.</p></section>`;
@@ -426,7 +442,7 @@ function joinHTML() {
       <form class="form" id="joinForm" novalidate>
         ${isNew ? field('jnName', 'Your name', `<input id="jnName" autocomplete="name" maxlength="60" value="${esc(draft.name == null ? m.name : draft.name)}">`) : ''}
         ${field('jnPhone', 'Phone number', phoneInput('jnPhone', draft.phone))}
-        ${field('jnPass', isNew ? 'Choose a password' : 'Password', `<input id="jnPass" type="password" autocomplete="${isNew ? 'new-password' : 'current-password'}">`, isNew ? 'At least 6 characters. You’ll log in with your phone number and this password.' : '')}
+        ${passwordField('jnPass', isNew ? 'Choose a password' : 'Password', isNew ? 'new-password' : 'current-password', isNew ? 'At least 6 characters. You’ll log in with your phone number and this password.' : '')}
         <p class="form-error" id="formErr" role="alert" hidden></p>
         <button type="submit" class="btn btn--primary" id="formSubmit">${isNew ? 'Create my login and join' : 'Log in and join'}</button>
       </form>`;
@@ -496,7 +512,9 @@ function rowHTML(d, k, m, idx, recId) {
   const bits = [];
   if (isRec) bits.push('<span class="text-accent">Gets the pot</span>');
   if (mk) {
-    bits.push(mk.status === 'paid' ? 'Confirmed ' + fmtTs(mk.at) : mk.status === 'late' ? 'Paid late · confirmed ' + fmtTs(mk.at) : 'Paid ' + fmtR(paidAmount(st, mk)) + ' of ' + fmtR(st.amount));
+    const amt = fmtR(paidAmount(st, mk)), when = paidDate(mk);
+    bits.push(mk.status === 'paid' ? `Paid ${amt} on ${when}` : mk.status === 'late' ? `Paid late · ${amt} on ${when}` : `Paid ${amt} of ${fmtR(st.amount)} on ${when}`);
+    if (mk.proof) bits.push(proofTag());
   } else if (cs === 'missed') bits.push('<span class="text-bad">Overdue since ' + fmtDate(due) + '</span>');
   else bits.push('Due ' + fmtDate(due));
   if (at === 'absent') bits.push('<span class="text-bad">missed the meeting</span>');
@@ -507,14 +525,14 @@ function rowHTML(d, k, m, idx, recId) {
   let end;
   if (mk) {
     const top = mk.status === 'part' ? 'Part' : mk.status === 'late' ? 'Late' : 'Paid';
-    const bottom = mk.status === 'part' ? fmtR(paidAmount(st, mk)) : mk.status === 'late' ? (st.lateFine ? '+' + fmtR(st.lateFine) : fmtTs(mk.at)) : fmtTs(mk.at);
+    const bottom = mk.status === 'part' ? fmtR(paidAmount(st, mk)) : mk.status === 'late' ? (st.lateFine ? '+' + fmtR(st.lateFine) : paidDate(mk)) : paidDate(mk);
     const stamp = stampHTML(mk.status, top, bottom, m.id + k, S.justStamped === k + ':' + m.id);
-    end = `<button type="button" class="stamp-btn" data-act="mark" data-id="${esc(m.id)}" aria-label="Change ${esc(m.name)}’s payment">${stamp}</button>`;
+    end = `<button type="button" class="stamp-btn" data-act="pay" data-id="${esc(m.id)}" aria-label="Change ${esc(m.name)}’s payment">${stamp}</button>`;
   } else {
-    end = `<button type="button" class="confirm-btn" data-act="quick" data-id="${esc(m.id)}" aria-label="Confirm ${esc(m.name)} paid">Confirm</button>`;
+    end = `<button type="button" class="confirm-btn" data-act="pay" data-id="${esc(m.id)}" aria-label="Confirm ${esc(m.name)}’s payment">Confirm</button>`;
   }
   const dot = at ? `<i class="att-dot ${at}" role="img" aria-label="Meeting: ${ATT_LABEL[at]}" title="Meeting: ${ATT_LABEL[at]}"></i>` : '';
-  return `<li class="ledger-row${isRec ? ' is-recipient' : ''}"><span class="row-num">${idx + 1}${dot}</span><button type="button" class="row-main" data-act="mark" data-id="${esc(m.id)}">${who}</button><div class="row-end">${end}</div></li>`;
+  return `<li class="ledger-row${isRec ? ' is-recipient' : ''}"><span class="row-num">${idx + 1}${dot}</span><button type="button" class="row-main" data-act="pay" data-id="${esc(m.id)}">${who}</button><div class="row-end">${end}</div></li>`;
 }
 
 function monthView(d) {
@@ -576,7 +594,7 @@ function monthView(d) {
   </section>
   ${act.length ? `<ol class="ledger" aria-label="Members">${act.map((m, i) => rowHTML(d, k, m, i, recId)).join('')}</ol>` : '<section class="card"><p class="empty">No members in this month yet.</p></section>'}
   <div class="ledger-foot"><button type="button" class="btn btn--ghost btn--sm" data-act="members">${ICON.people}Add or remove members</button></div>
-  <p class="hint">Tap a name to record a late or part payment${st.meetings ? ', mark the meeting,' : ''} or clear a confirmation.</p>`;
+  <p class="hint">Confirm records the amount, the date it was paid and, if you have one, a proof of payment. Tap a name to change a payment${st.meetings ? ' or mark the meeting' : ''}.</p>`;
 }
 
 function movesHTML(m, i, ci, n) {
@@ -697,12 +715,14 @@ function memberView(d) {
   const mk = markOf(d, cur, meId), bal = balance(d, meId);
   let nowLine;
   if (!isActive(me, cur)) nowLine = `<p class="sub">You’re not paying in ${monthName(cur)}.</p>`;
-  else if (mk) nowLine = `<div class="info-row"><div><p class="label">${monthName(cur)}</p><p class="info-value">${mk.status === 'part' ? fmtR(paidAmount(st, mk)) + ' of ' + fmtR(st.amount) + ' confirmed' : 'Confirmed ' + fmtTs(mk.at)}</p></div>${stampHTML(mk.status, mk.status === 'part' ? 'Part' : mk.status === 'late' ? 'Late' : 'Paid', mk.status === 'part' ? fmtR(paidAmount(st, mk)) : fmtTs(mk.at), meId + cur)}</div>`;
+  else if (mk) nowLine = `<div class="info-row"><div><p class="label">${monthName(cur)}</p><p class="info-value">${mk.status === 'part' ? fmtR(paidAmount(st, mk)) + ' of ' + fmtR(st.amount) : fmtR(paidAmount(st, mk))} paid on ${paidDate(mk)}</p>${mk.proof ? `<a class="proof-link" href="${esc(proofUrl(st.id, meId, cur, mk.proof))}" target="_blank" rel="noopener">${ICON.clip}View proof of payment</a>` : ''}</div>${stampHTML(mk.status, mk.status === 'part' ? 'Part' : mk.status === 'late' ? 'Late' : 'Paid', mk.status === 'part' ? fmtR(paidAmount(st, mk)) : paidDate(mk), meId + cur)}</div>`;
   else nowLine = `<div class="info-row"><div><p class="label">${monthName(cur)}</p><p class="info-value${isDue(st, cur) ? ' text-bad' : ''}">${isDue(st, cur) ? 'Not confirmed · was due ' + fmtDate(dueDate(cur, st.payDay)) : 'Not confirmed yet · due ' + fmtDate(dueDate(cur, st.payDay))}</p></div></div>`;
   const shown = keys.filter(k => monthDiff(k, tk) >= 0 && isActive(me, k)).reverse();
   const history = shown.map(k => {
     const c = markOf(d, k, meId), cs = cellState(d, k, meId);
-    const sub = c ? (c.status === 'part' ? 'Part payment · confirmed ' + fmtTs(c.at) : 'Confirmed ' + fmtTs(c.at)) : cs === 'missed' ? 'Not confirmed · was due ' + fmtDate(dueDate(k, st.payDay)) : 'Due ' + fmtDate(dueDate(k, st.payDay));
+    const sub = c
+      ? (c.status === 'part' ? 'Part payment · paid ' : 'Paid ') + paidDate(c) + (c.proof ? ` · <a href="${esc(proofUrl(st.id, meId, k, c.proof))}" target="_blank" rel="noopener">View proof</a>` : '')
+      : cs === 'missed' ? 'Not confirmed · was due ' + fmtDate(dueDate(k, st.payDay)) : 'Due ' + fmtDate(dueDate(k, st.payDay));
     const end = c ? `<span class="amt">${fmtR(paidAmount(st, c))}</span>` : `<span class="no-stamp${cs === 'missed' ? ' text-bad' : ''}">${cs === 'missed' ? 'Owing' : 'Not yet'}</span>`;
     return `<li><span class="name">${monthLong(k)} ${c ? miniStamp(c.status) : ''}</span><span class="sub">${sub}</span>${end}</li>`;
   }).join('');
@@ -866,7 +886,7 @@ function closeSheet(silent) {
   const sh = $('#sheet');
   if (S.draw) { clearInterval(S.draw.timer); S.draw = null; }
   const was = S.sheet;
-  S.reg = null; S.memView = null; S.memAsk = null; S.treasAsk = null;
+  S.reg = null; S.memView = null; S.memAsk = null; S.treasAsk = null; S.pay = null;
   sh.hidden = true;
   sh.innerHTML = '';
   S.sheet = null;
@@ -920,21 +940,29 @@ function setMark(d, k, id, mark) {
   d.marks[k] = Object.assign({}, d.marks[k] || {});
   if (mark) d.marks[k][id] = mark; else delete d.marks[k][id];
 }
-async function confirmPay(sid, memberId, month, status, amount) {
+// change: { status, amount, paidOn, proof }. status null clears the payment (and its proof).
+// proof: undefined keeps the saved one, null removes it, { name, type, size, data } replaces it.
+async function confirmPay(sid, memberId, month, change) {
   const d = liveBook(sid);
   if (!d) return { ok: false, prev: null };
-  const prev = markOf(d, month, memberId);
-  setMark(d, month, memberId, status ? { status, amount: status === 'part' ? amount : d.st.amount, at: new Date().toISOString(), by: S.session.user.name } : null);
+  const { status, amount, paidOn, proof } = change, prev = markOf(d, month, memberId), stamp = new Date().toISOString();
+  setMark(d, month, memberId, status ? {
+    status, amount: status === 'part' ? amount : d.st.amount, at: stamp, by: S.session.user.name, paidOn: paidOn || '',
+    proof: proof === undefined ? (prev ? prev.proof : null) : proof ? { name: proof.name, type: proof.type, size: proof.size, at: stamp, pending: true } : null,
+  } : null);
   if (showing(d)) render();
   bump(1);
   try {
-    const r = await api('PUT', `stokvels/${sid}/contributions`, { memberId, month, status: status || null, amount });
-    const c = r.contribution, next = c ? { status: c.status, amount: c.amount, at: c.at, by: c.byName } : null, now = liveBook(sid);
+    const r = await api('PUT', `stokvels/${sid}/contributions`, { memberId, month, status: status || null, amount, paidOn, proof });
+    const c = r.contribution, now = liveBook(sid);
+    const next = c ? { status: c.status, amount: c.amount, at: c.at, by: c.byName, paidOn: c.paidOn || '', proof: c.proof || null } : null;
     if (now) {
       const was = markOf(now, month, memberId);
       setMark(now, month, memberId, next);
       // Skip the repaint when nothing visible changed, so the stamping motion can finish.
-      const same = was && next ? was.status === next.status && was.amount === next.amount && fmtTs(was.at) === fmtTs(next.at) : was === next;
+      const same = was && next
+        ? was.status === next.status && was.amount === next.amount && paidDate(was) === paidDate(next) && !!was.proof === !!next.proof
+        : was === next;
       if (!same && showing(now)) render();
     }
     return { ok: true, prev };
@@ -945,62 +973,148 @@ async function confirmPay(sid, memberId, month, status, amount) {
     return { ok: false, prev };
   } finally { bump(-1); }
 }
-const undoPay = (sid, memberId, month, prev) => confirmPay(sid, memberId, month, prev ? prev.status : null, prev ? prev.amount : undefined);
+// Undo puts back the amount, date and status. A proof that was removed or replaced stays as it is now.
+const undoPay = (sid, memberId, month, prev) => confirmPay(sid, memberId, month, prev
+  ? { status: prev.status, amount: prev.amount, paidOn: prev.paidOn || isoDate(new Date(prev.at)) }
+  : { status: null });
 
-async function quickStamp(id) {
-  const d = S.d, sid = d.st.id, k = selKey(d), m = findMember(d, id);
-  if (!m) return;
-  S.justStamped = k + ':' + id;
-  const r = await confirmPay(sid, id, k, 'paid');
-  if (r.ok) toast('Confirmed ' + m.name + ' paid', { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
+/* ---------- confirming a payment: amount, date paid, proof ---------- */
+function openPay(id) {
+  const d = S.d;
+  if (!findMember(d, id)) return;
+  S.pay = { id, k: selKey(d), proof: undefined, busy: false };
+  openSheet('pay', paySheetHTML);
 }
-function markSheetHTML(id) {
-  const d = S.d, st = d.st, k = selKey(d), m = findMember(d, id);
+function paySheetHTML() {
+  const d = S.d, st = d.st, p = S.pay, k = p.k, m = findMember(d, p.id);
   if (!m) return '';
-  const mk = markOf(d, k, id), cur = mk ? mk.status : 'none', due = dueDate(k, st.payDay), at = attOf(d, k, id), mt = meetingOf(d, k);
-  const opt = (s, t, desc, first) => `<button type="button" class="option${cur === s ? ' is-selected' : ''}" data-act="setmark" data-s="${s}" data-id="${esc(id)}" aria-pressed="${cur === s}"${first ? ' data-first' : ''}><span class="option-title">${t}</span><span class="option-desc">${desc}</span></button>`;
-  const partVal = mk && mk.status === 'part' ? paidAmount(st, mk) : Math.round(st.amount / 2);
+  const mk = markOf(d, k, p.id), due = isoDate(dueDate(k, st.payDay)), today = isoDate(new Date());
+  const amount = mk ? paidAmount(st, mk) : st.amount;
+  const date = mk ? (validDate(mk.paidOn) ? mk.paidOn : isoDate(new Date(mk.at))) : today;
+  const late = mk ? mk.status === 'late' : date > due;
+  const at = attOf(d, k, p.id), mt = meetingOf(d, k);
   const meeting = st.meetings ? `<div class="option">
       <span class="option-title">Meeting</span>
       <span class="option-desc">${mt ? 'Register for ' + fmtDay(mt.date) + '. Tap again to clear.' : 'No register yet for ' + monthName(k) + '. This starts one.'}</span>
-      <div class="segmented" role="group" aria-label="Meeting attendance">${ATTENDANCE.map(a => `<button type="button" data-act="setatt" data-id="${esc(id)}" data-a="${a}" aria-pressed="${at === a}">${ATT_LABEL[a]}</button>`).join('')}</div>
+      <div class="segmented" role="group" aria-label="Meeting attendance">${ATTENDANCE.map(a => `<button type="button" data-act="setatt" data-id="${esc(p.id)}" data-a="${a}" aria-pressed="${at === a}">${ATT_LABEL[a]}</button>`).join('')}</div>
     </div>` : '';
-  return `<div class="sheet-head"><div><h2 id="sheetTitle">${esc(m.name)}</h2><p>${monthLong(k)} · ${fmtR(st.amount)} due ${fmtDate(due)}</p></div>${closeBtn}</div>
-    <div class="options">
-      ${opt('paid', 'Paid', 'In full, on time', true)}
-      ${opt('late', 'Paid late', st.lateFine ? 'In full, plus the ' + fmtR(st.lateFine) + ' late fine' : 'In full, after the due date')}
-      <div class="option${cur === 'part' ? ' is-selected' : ''}">
-        <label class="option-title" for="partAmt">Part payment</label>
-        <span class="option-desc">How much has come in so far</span>
-        <form class="input-row" id="partForm" data-id="${esc(id)}" novalidate><span class="money-input"><i>R</i><input id="partAmt" inputmode="numeric" autocomplete="off" value="${partVal}"></span><button type="submit" class="btn">Confirm part</button></form>
-        <p class="form-error" id="partErr" role="alert" hidden></p>
+  return `<div class="sheet-head"><div><h2 id="sheetTitle">${esc(m.name)}</h2><p>${monthLong(k)} · ${fmtR(st.amount)} due ${fmtISO(due)}</p></div>${closeBtn}</div>
+    <form class="form" id="payForm" data-id="${esc(p.id)}" novalidate>
+      <div class="field-row">
+        ${field('payAmt', 'Amount paid', `<span class="money-input"><i>R</i><input id="payAmt" inputmode="numeric" autocomplete="off" value="${amount}"></span>`)}
+        ${field('payDate', 'Date paid', `<input id="payDate" type="date" value="${date}" max="${today}">`)}
       </div>
-      ${mk ? `<button type="button" class="option option--quiet" data-act="setmark" data-s="none" data-id="${esc(id)}"><span class="option-title">Clear the confirmation</span><span class="option-desc">Back to not paid</span></button>` : ''}
-      ${meeting}
-    </div>
+      <p class="fineprint" id="payHint">${payHint(amount)}</p>
+      <label class="toggle" for="payLate" id="payLateRow"${amount < st.amount ? ' hidden' : ''}><span><b>Paid late</b><small>After the ${fmtISO(due)} due date.${st.lateFine ? ' Adds the ' + fmtR(st.lateFine) + ' late fine.' : ''}</small></span><input type="checkbox" id="payLate"${late ? ' checked' : ''}></label>
+      <div class="field"><span class="field-label">Proof of payment <span class="field-optional">optional</span></span><div id="proofBox">${proofBoxHTML()}</div></div>
+      <p class="form-error" id="payErr" role="alert" hidden></p>
+      <button type="submit" class="btn btn--primary" id="paySubmit" data-first>${mk ? 'Save changes' : 'Confirm payment'}</button>
+    </form>
+    ${mk ? `<button type="button" class="option option--quiet" data-act="clearPay" data-id="${esc(p.id)}"><span class="option-title">Clear the confirmation</span><span class="option-desc">Back to not paid.${mk.proof ? ' The proof of payment is removed too.' : ''}</span></button>` : ''}
+    ${meeting}
     ${mk ? `<p class="fineprint">Confirmed ${fmtTs(mk.at)}${mk.by ? ' by ' + esc(mk.by) : ''}.</p>` : ''}`;
 }
-async function setMarkAction(id, s) {
-  const d = S.d, sid = d.st.id, k = selKey(d), m = findMember(d, id);
-  if (!m) return;
-  const prev = markOf(d, k, id);
-  closeSheet();
-  if ((prev ? prev.status : 'none') === s) return;
-  if (s !== 'none') S.justStamped = k + ':' + id;
-  const r = await confirmPay(sid, id, k, s === 'none' ? null : s);
-  if (r.ok) toast(s === 'none' ? 'Cleared ' + m.name + '’s confirmation' : 'Confirmed ' + m.name + (s === 'late' ? ' paid late' : ' paid'), { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
+function payHint(amount) {
+  const st = S.d.st, mon = monthName(S.pay.k);
+  if (!(amount > 0)) return 'Enter the amount in rand.';
+  if (amount < st.amount) return `Part payment: ${fmtR(st.amount - amount)} still to come for ${mon}.`;
+  if (amount > st.amount) return `Counts as ${fmtR(st.amount)} for ${mon}, the most one month takes.`;
+  return `Paid in full for ${mon}.`;
 }
-async function setPartAction(id) {
-  const d = S.d, sid = d.st.id, st = d.st, k = selKey(d), m = findMember(d, id);
-  if (!m) return;
-  const amt = toInt($('#partAmt').value);
-  if (!(amt > 0)) { formError('partErr', 'Enter the amount they paid, in rand.'); return; }
+// Keeps the hint and the "Paid late" switch in step with what is typed.
+function syncPayForm(dateChanged) {
+  if (!S.pay || !$('#payForm')) return;
+  const st = S.d.st, amount = toInt($('#payAmt').value);
+  $('#payHint').textContent = payHint(amount);
+  $('#payLateRow').hidden = amount < st.amount;
+  const date = $('#payDate').value;
+  if (dateChanged && validDate(date)) $('#payLate').checked = date > isoDate(dueDate(S.pay.k, st.payDay));
+}
+function proofBoxHTML() {
+  const d = S.d, p = S.pay, mk = markOf(d, p.k, p.id);
+  if (p.busy) return `<p class="proof-busy" role="status"><i></i>Preparing the file…</p>`;
+  const pr = p.proof === undefined ? (mk && mk.proof) : p.proof;
+  if (!pr) return `<label class="file-pick"><input type="file" id="payProof" class="visually-hidden" accept="image/*,application/pdf">${ICON.clip}<span>Add a photo or PDF</span></label>`;
+  const fresh = !!(p.proof && p.proof.data);
+  const src = fresh ? p.proof.preview : pr.pending ? '' : proofUrl(d.st.id, p.id, p.k, pr);
+  const thumb = /^image\//.test(pr.type) && src ? `<img src="${esc(src)}" alt="">` : `<span class="proof-file">${ICON.file}</span>`;
+  const view = !fresh && src ? `<a class="btn btn--sm" href="${esc(src)}" target="_blank" rel="noopener">View</a>` : '';
+  return `<div class="proof">${thumb}<div class="proof-text"><b>${esc(pr.name || 'Proof of payment')}</b><small>${fmtSize(pr.size || 0)}${fresh ? ' · not saved yet' : ''}</small></div>
+    <div class="proof-actions">${view}<button type="button" class="btn btn--sm btn--danger" data-act="proofRemove">Remove</button></div></div>`;
+}
+function paintProof() { const box = $('#proofBox'); if (box) box.innerHTML = proofBoxHTML(); }
+
+// Proof of payment files: a photo (shrunk to at most 1600px and saved as JPEG) or a PDF, up to 3 MB.
+const PROOF_MAX = 3 * 1024 * 1024;
+const readDataURL = file => new Promise((resolve, reject) => {
+  const r = new FileReader();
+  r.onload = () => resolve(String(r.result));
+  r.onerror = () => reject(r.error);
+  r.readAsDataURL(file);
+});
+function photoToJpeg(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, 1600 / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff';   // transparent screenshots get a white page, not a black one
+      g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL('image/jpeg', 0.82));
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('unreadable')); };
+    img.src = url;
+  });
+}
+async function pickProof(file) {
+  const p = S.pay;
+  if (!p) return;
+  formError('payErr', '');
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  const isImage = /^image\//.test(file.type) || /\.(jpe?g|png|webp|heic|heif)$/i.test(file.name);
+  try {
+    if (!isPdf && !isImage) throw new Error('Choose a photo or a PDF.');
+    if (isPdf && file.size > PROOF_MAX) throw new Error('That PDF is too big. Use one under 3 MB, or a photo of the slip.');
+    p.busy = true; paintProof();
+    const url = isPdf ? await readDataURL(file) : await photoToJpeg(file);
+    const data = url.slice(url.indexOf(',') + 1);
+    const size = Math.floor(data.length * 3 / 4) - (data.endsWith('==') ? 2 : data.endsWith('=') ? 1 : 0);
+    if (size > PROOF_MAX) throw new Error('That file is too big. Use a photo, or a PDF under 3 MB.');
+    const name = isPdf ? file.name : (file.name.replace(/\.[^.]*$/, '') || 'proof-of-payment') + '.jpg';
+    if (S.pay === p) p.proof = { name, type: isPdf ? 'application/pdf' : 'image/jpeg', size, data, preview: isPdf ? '' : url };
+  } catch (e) {
+    if (S.pay === p) formError('payErr', e && e.message && e.message !== 'unreadable' ? e.message : 'That photo couldn’t be opened. Try a JPG or PNG, or a PDF.');
+  } finally {
+    if (S.pay === p) { p.busy = false; paintProof(); }
+  }
+}
+async function savePayment(form) {
+  const d = S.d, st = d.st, p = S.pay, id = form.dataset.id, m = findMember(d, id);
+  if (!p || !m) return;
+  if (p.busy) return formError('payErr', 'Wait a moment: the file is still being prepared.');
+  const amt = toInt($('#payAmt').value), date = ($('#payDate').value || '').trim();
+  if (!(amt > 0)) return formError('payErr', 'Enter the amount they paid, in rand.');
+  if (!validDate(date)) return formError('payErr', 'Pick the date they paid.');
+  if (date > isoDate(new Date())) return formError('payErr', 'The payment date can’t be in the future.');
+  const full = amt >= st.amount, status = full ? ($('#payLate').checked ? 'late' : 'paid') : 'part';
+  const proof = p.proof === undefined ? undefined : p.proof && { name: p.proof.name, type: p.proof.type, size: p.proof.size, data: p.proof.data };
+  const sid = st.id, k = p.k;
   closeSheet();
   S.justStamped = k + ':' + id;
-  // A "part" payment that covers the month is simply paid.
-  const full = amt >= st.amount;
-  const r = await confirmPay(sid, id, k, full ? 'paid' : 'part', full ? undefined : amt);
-  if (r.ok) toast(full ? 'That covers it. Confirmed ' + m.name + ' paid' : 'Confirmed ' + fmtR(amt) + ' from ' + m.name, { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
+  const r = await confirmPay(sid, id, k, { status, amount: full ? undefined : amt, paidOn: date, proof });
+  if (r.ok) toast(`Confirmed ${fmtR(full ? st.amount : amt)} from ${m.name}, paid ${fmtISO(date)}`, { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
+}
+async function clearPay(id) {
+  const d = S.d, sid = d.st.id, k = S.pay ? S.pay.k : selKey(d), m = findMember(d, id);
+  closeSheet();
+  if (!m || !markOf(d, k, id)) return;
+  const r = await confirmPay(sid, id, k, { status: null });
+  if (r.ok) toast('Cleared ' + m.name + '’s confirmation', { label: 'Undo', run: () => undoPay(sid, id, k, r.prev) });
 }
 async function putMeeting(sid, k, heldOn, attendance, merge) {
   bump(1);
@@ -1327,8 +1441,8 @@ function accountSheetHTML() {
     </form>
     <hr class="divider">
     <form id="passwordForm" class="form" novalidate>
-      ${field('pwOld', 'Current password', '<input id="pwOld" type="password" autocomplete="current-password">')}
-      ${field('pwNew', 'New password', '<input id="pwNew" type="password" autocomplete="new-password">', 'At least 6 characters. Other devices will be logged out.')}
+      ${passwordField('pwOld', 'Current password', 'current-password')}
+      ${passwordField('pwNew', 'New password', 'new-password', 'At least 6 characters. Other devices will be logged out.')}
       <p class="form-error" id="pwErr" role="alert" hidden></p>
       <button type="submit" class="btn" id="pwSave">Change password</button>
     </form>
@@ -1413,8 +1527,8 @@ async function submitForm(form) {
     const r = await memberCall('PATCH', 'members/' + form.dataset.id, { name: $('#mName').value, title: $('#mTitle').value }, 'Saved');
     done();
     if (r) refreshSheet();
-  } else if (id === 'partForm') {
-    await setPartAction(form.dataset.id);
+  } else if (id === 'payForm') {
+    await savePayment(form);
   } else if (id === 'accountForm') {
     const done = busyButton('acSave', 'Saving…');
     try {
@@ -1489,9 +1603,18 @@ document.addEventListener('click', ev => {
       break;
     }
     case 'goto': S.monthKey = el.dataset.k; S.tab = 'month'; store.set('tab', 'month'); render(); window.scrollTo(0, 0); break;
-    case 'quick': quickStamp(id); break;
-    case 'mark': openSheet('mark', () => markSheetHTML(id)); break;
-    case 'setmark': setMarkAction(id, el.dataset.s); break;
+    case 'pay': openPay(id); break;
+    case 'clearPay': clearPay(id); break;
+    case 'proofRemove': if (S.pay) { S.pay.proof = null; paintProof(); } break;
+    case 'reveal': {
+      const input = $('#' + el.dataset.for);
+      if (!input) break;
+      const show = input.type === 'password';
+      input.type = show ? 'text' : 'password';
+      el.setAttribute('aria-pressed', String(show));
+      el.innerHTML = show ? ICON.eyeOff : ICON.eye;
+      break;
+    }
     case 'setatt': setAtt(id, el.dataset.a); break;
     case 'register': openRegister(); break;
     case 'regSet': if (S.reg) { S.reg.att[id] = S.reg.att[id] === el.dataset.a ? null : el.dataset.a; paintRegister(); } break;
@@ -1557,12 +1680,15 @@ document.addEventListener('change', ev => {
   if (t.name === 'fKind') $$('.fund-only').forEach(e => { e.hidden = t.value !== 'fund'; });
   if (t.id === 'fMeet') $$('.meet-only').forEach(e => { e.hidden = !t.checked; });
   if (t.id === 'fTreasurer') paintTreasurerOptions();
+  if (t.id === 'payDate') syncPayForm(true);
+  if (t.id === 'payProof' && t.files && t.files[0]) pickProof(t.files[0]);
 });
 document.addEventListener('input', ev => {
   const t = ev.target;
   if (t.id === 'fMembers' || t.id === 'fMe') paintTreasurerOptions();
   else if (t.id === 'jnName') S.joinDraft.name = t.value;
   else if (t.id === 'jnPhone') S.joinDraft.phone = t.value;
+  else if (t.id === 'payAmt') syncPayForm(false);
 });
 document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && S.sheet) closeSheet(); });
 

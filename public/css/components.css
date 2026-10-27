@@ -445,6 +445,114 @@
 .choice small,
 .toggle small { display: block; color: var(--ink-2); font-size: var(--text-sm); }
 
+/* A password with a show/hide button.
+   <div class="field"><label class="field-label" for="x">…</label>
+     <span class="password-input"><input id="x" type="password"><button class="reveal" aria-pressed="false">…</button></span></div> */
+.password-input { position: relative; display: block; }
+.password-input input { padding-right: var(--control); }
+.password-input input::-ms-reveal { display: none; }   /* Edge's own eye button */
+.reveal {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: grid;
+  place-items: center;
+  width: var(--control);
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: none;
+  color: var(--ink-3);
+}
+.reveal svg { width: 20px; height: 20px; }
+.reveal[aria-pressed="true"] { color: var(--pen); }
+
+/* "optional" after a field label */
+.field-optional {
+  margin-left: var(--space-2xs);
+  color: var(--ink-3);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+/* ---- Proof of payment ----
+   Before a file is chosen: <label class="file-pick"><input type="file" class="visually-hidden">…</label>
+   After: <div class="proof"><img> <div class="proof-text"><b>name</b><small>size</small></div> <div class="proof-actions">…</div></div> */
+.file-pick {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  min-height: var(--control);
+  padding: 0 var(--space-lg);
+  border: 1.5px dashed var(--rule-strong);
+  border-radius: var(--radius-md);
+  color: var(--ink-2);
+  font-size: var(--text-md);
+  font-weight: 650;
+  cursor: pointer;
+}
+.file-pick svg { width: 18px; height: 18px; }
+.file-pick:focus-within { outline: 2px solid var(--pen); outline-offset: 2px; }
+@media (hover: hover) {
+  .file-pick:hover { border-color: var(--pen); color: var(--pen); }
+}
+.proof {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-sm);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--radius-md);
+}
+.proof img,
+.proof-file {
+  width: 56px;
+  height: 56px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  object-fit: cover;
+  object-position: top;   /* slips and banking screenshots carry the key details at the top */
+}
+.proof-file { display: grid; place-items: center; color: var(--ink-3); }
+.proof-file svg { width: 26px; height: 26px; }
+.proof-text { display: grid; gap: var(--space-3xs); min-width: 0; }
+.proof-text b { overflow: hidden; font-size: var(--text-md); text-overflow: ellipsis; white-space: nowrap; }
+.proof-text small { color: var(--ink-3); font-size: var(--text-xs); }
+.proof-actions { display: flex; gap: var(--space-xs); }
+.proof-busy {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-height: var(--control);
+  color: var(--ink-2);
+  font-size: var(--text-md);
+}
+.proof-busy i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--pen);
+  animation: blink 1s ease-in-out infinite;
+}
+/* "📎 Proof" in a ledger row, and the link in a member's own record. */
+.proof-tag { display: inline-flex; align-items: center; gap: var(--space-3xs); white-space: nowrap; }
+.proof-tag svg,
+.proof-link svg { flex: none; width: 14px; height: 14px; }
+.proof-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2xs);
+  margin-top: var(--space-2xs);
+  font-size: var(--text-sm);
+  font-weight: 650;
+}
+
 /* An input with its button. <form class="input-row"><input><button class="btn">Add</button></form> */
 .input-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-sm); }
 

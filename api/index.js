@@ -6,13 +6,15 @@ import {
   newToken, sha256, safeEqual, readCookie, sessionCookie,
 } from '../lib/auth.js';
 import {
-  KEY_RE, DATE_RE, STATUSES, ATTENDANCE, TITLES, addMonths, monthDiff, isActive, rotation, saMonth,
+  KEY_RE, DATE_RE, STATUSES, ATTENDANCE, TITLES, addMonths, monthDiff, isActive, rotation, saMonth, saToday, isoDate,
 } from '../public/logic.js';
 
 class HttpError extends Error {
   constructor(status, message, code) { super(message); this.status = status; this.code = code || null; }
 }
 const fail = (status, message, code) => { throw new HttpError(status, message, code); };
+// A route that writes its own response (a file, not JSON) returns this.
+const SENT = Symbol('sent');
 
 const UUID = '([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})';
 const MONTH = '(\\d{4}-(?:0[1-9]|1[0-2]))';
@@ -37,11 +39,12 @@ const ROUTES = [
   ['DELETE', `stokvels/${UUID}/members/${UUID}`, removeMember, true],
   ['POST', `stokvels/${UUID}/members/${UUID}/invite`, inviteMember, true],
   ['DELETE', `stokvels/${UUID}/members/${UUID}/link`, unlinkMember, true],
-  ['PUT', `stokvels/${UUID}/contributions`, putContribution, true],
+  ['PUT', `stokvels/${UUID}/contributions`, putContribution, true, 4600000],
+  ['GET', `stokvels/${UUID}/proofs/${UUID}/${MONTH}`, getProof, true],
   ['PUT', `stokvels/${UUID}/meetings/${MONTH}`, putMeeting, true],
   ['PUT', `stokvels/${UUID}/payouts/${MONTH}`, putPayout, true],
   ['PUT', `stokvels/${UUID}/order`, putOrder, true],
-].map(([method, pattern, fn, auth]) => ({ method, re: new RegExp('^' + pattern + '$'), fn, auth }));
+].map(([method, pattern, fn, auth, limit = 200000]) => ({ method, re: new RegExp('^' + pattern + '$'), fn, auth, limit }));
 
 export default async function handler(req, res) {
   try {
@@ -65,9 +68,9 @@ export default async function handler(req, res) {
     await ensureSchema();
     const user = await currentUser(req);
     if (route.auth && !user) fail(401, 'Log in to continue.', 'auth');
-    const body = method === 'GET' ? {} : await readBody(req);
+    const body = method === 'GET' ? {} : await readBody(req, route.limit);
     const out = await route.fn({ req, res, url, params, user, body });
-    send(res, 200, out || {});
+    if (out !== SENT) send(res, 200, out || {});
   } catch (e) {
     if (e instanceof HttpError) return send(res, e.status, { error: e.message, code: e.code });
     console.error('[stokvel]', e);
@@ -92,7 +95,7 @@ function send(res, status, data) {
   res.end(JSON.stringify(data));
 }
 
-async function readBody(req) {
+async function readBody(req, limit) {
   let pre;
   try { pre = req.body; } catch (e) { fail(400, 'Send the data as JSON.'); }
   if (pre && typeof pre === 'object' && !Buffer.isBuffer(pre)) return pre;
@@ -102,7 +105,7 @@ async function readBody(req) {
     let size = 0;
     for await (const c of req) {
       size += c.length;
-      if (size > 200000) fail(413, 'That request is too large.');
+      if (size > limit) fail(413, 'That request is too large.');
       chunks.push(c);
     }
     raw = Buffer.concat(chunks).toString('utf8');
@@ -208,6 +211,46 @@ function readSettings(body, creating) {
   if (has('meetFine')) out.meetFine = whole(body.meetFine ?? 0, 'The missed-meeting fine', 0, 1000000);
   return out;
 }
+// The day a payment was made. Defaults to today; a day of slack allows for phones in another time zone.
+function paidOnOf(v) {
+  if (v === undefined || v === null || v === '') return isoDate(saToday());
+  const s = String(v);
+  const [y, m, d] = s.split('-').map(Number);
+  if (!DATE_RE.test(s) || new Date(y, m - 1, d).getDate() !== d) fail(400, 'Pick the date of the payment.');
+  const tomorrow = saToday();
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  if (s > isoDate(tomorrow)) fail(400, 'The payment date can’t be in the future.');
+  return s;
+}
+
+// Proof of payment: a photo or a PDF of up to 3 MB, sent as base64. The type comes from
+// the file's first bytes, never from what the browser claims, so nothing else can be stored.
+const PROOF_MAX = 3 * 1024 * 1024;
+const PROOF_TYPES = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'application/pdf': '.pdf' };
+function sniffType(b) {
+  if (b.length > 3 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+  if (b.length > 8 && b.toString('hex', 0, 8) === '89504e470d0a1a0a') return 'image/png';
+  if (b.length > 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP') return 'image/webp';
+  if (b.length > 5 && b.toString('latin1', 0, 5) === '%PDF-') return 'application/pdf';
+  return null;
+}
+function readProof(v) {
+  if (v === undefined) return undefined;   // keep whatever is there
+  if (v === null) return null;             // remove it
+  if (!v || typeof v !== 'object' || typeof v.data !== 'string' || !v.data) fail(400, 'Attach the proof as a photo or a PDF.');
+  const tooBig = () => fail(413, 'That file is too big. Use a photo, or a PDF under 3 MB.', 'too_big');
+  if (v.data.length > Math.ceil(PROOF_MAX / 3) * 4 + 4) tooBig();
+  const buf = Buffer.from(v.data, 'base64');
+  if (buf.length > PROOF_MAX) tooBig();
+  const type = sniffType(buf);
+  if (!type) fail(400, 'Proof of payment must be a photo (JPG, PNG or WebP) or a PDF.', 'proof_type');
+  const ext = PROOF_TYPES[type];
+  let name = String(v.name || '').replace(/[\\/:*?"<>|\u0000-\u001f]/g, '').trim().slice(-80);
+  if (!name.toLowerCase().endsWith(ext)) name = (name.replace(/\.[^.]*$/, '') || 'proof-of-payment').slice(0, 70) + ext;
+  return { buf, type, name };
+}
+const proofMeta = r => r && r.proof_type ? { name: r.proof_name, type: r.proof_type, size: r.proof_size, at: r.proof_at } : null;
+
 const setupCode = () => String(process.env.SETUP_CODE || '').toUpperCase().replace(/\s+/g, '');
 // Ends a sentence that finishes on a name, without doubling the full stop of names like "Tshepo M."
 const stop = s => /[.!?]$/.test(String(s)) ? String(s) : String(s) + '.';
@@ -518,8 +561,11 @@ async function getStokvel({ params, user }) {
          FROM members m LEFT JOIN users u ON u.id = m.user_id
         WHERE m.stokvel_id = $1::uuid
         ORDER BY m.sort, m.created_at`, [sid, a.canManage]),
-    q(`SELECT c.member_id::text AS member_id, c.month, c.status, c.amount, ${iso('c.confirmed_at')} AS at, u.name AS by_name
-         FROM contributions c LEFT JOIN users u ON u.id = c.confirmed_by
+    q(`SELECT c.member_id::text AS member_id, c.month, c.status, c.amount, c.paid_on, ${iso('c.confirmed_at')} AS at, u.name AS by_name,
+              p.name AS proof_name, p.type AS proof_type, p.size AS proof_size, ${iso('p.uploaded_at')} AS proof_at
+         FROM contributions c
+         LEFT JOIN users u ON u.id = c.confirmed_by
+         LEFT JOIN proofs p ON p.member_id = c.member_id AND p.month = c.month
         WHERE c.stokvel_id = $1::uuid AND ($2::boolean OR c.member_id = $3::uuid)`, [sid, full, a.my_member_id]),
     q(`SELECT month, sum(amount)::int AS collected, (count(*) FILTER (WHERE status <> 'part'))::int AS paid
          FROM contributions WHERE stokvel_id = $1::uuid GROUP BY month`, [sid]),
@@ -549,7 +595,10 @@ async function getStokvel({ params, user }) {
       id: m.id, name: m.name, title: m.title, joined: m.joined_month, left: m.left_month, sort: m.sort,
       linked: m.linked, accountName: m.account_name, inviteExpires: m.invite_expires,
     })),
-    contributions: contributions.map(c => ({ memberId: c.member_id, month: c.month, status: c.status, amount: c.amount, at: c.at, byName: c.by_name })),
+    contributions: contributions.map(c => ({
+      memberId: c.member_id, month: c.month, status: c.status, amount: c.amount, paidOn: c.paid_on || '',
+      at: c.at, byName: c.by_name, proof: proofMeta(c),
+    })),
     totals: Object.fromEntries(totals.map(r => [r.month, { collected: r.collected, paid: r.paid }])),
     meetings: st.meetings ? meetings.map(m => ({ month: m.month, heldOn: m.held_on, attendance: m.attendance || {} })) : [],
     payouts: payouts.map(p => ({ month: p.month, at: p.at, byName: p.by_name })),
@@ -709,7 +758,9 @@ async function putContribution({ params, user, body }) {
   const month = monthOf(body.month, a);
   if (!isActive({ joined: m.joined_month, left: m.left_month }, month)) fail(400, `${m.name} wasn’t a member in that month.`);
   if (body.status === null || body.status === undefined || body.status === '') {
-    await q(`DELETE FROM contributions WHERE member_id = $1::uuid AND month = $2`, [m.id, month]);
+    await q(
+      `WITH c AS (DELETE FROM contributions WHERE member_id = $1::uuid AND month = $2 RETURNING 1)
+       DELETE FROM proofs WHERE member_id = $1::uuid AND month = $2`, [m.id, month]);
     await log(a.id, user.id, 'cleared', { member: m.name, month });
     return { contribution: null };
   }
@@ -719,15 +770,63 @@ async function putContribution({ params, user, body }) {
     amount = whole(body.amount, 'The part payment', 1, 10000000);
     if (amount >= a.amount) { status = 'paid'; amount = a.amount; }
   }
+  const paidOn = paidOnOf(body.paidOn);
+  const proof = readProof(body.proof);
+  // The payment and its proof are saved together, in one statement.
+  const values = [m.id, a.id, month, status, amount, paidOn, user.id];
+  let proofStep = '';
+  if (proof) {
+    values.push(proof.name, proof.type, proof.buf.length, proof.buf.toString('base64'));
+    proofStep = `, pr AS (
+      INSERT INTO proofs (member_id, stokvel_id, month, name, type, size, data, uploaded_by)
+      VALUES ($1::uuid, $2::uuid, $3, $8, $9, $10::int, decode($11, 'base64'), $7::uuid)
+      ON CONFLICT (member_id, month) DO UPDATE SET name = EXCLUDED.name, type = EXCLUDED.type, size = EXCLUDED.size,
+        data = EXCLUDED.data, uploaded_by = EXCLUDED.uploaded_by, uploaded_at = now()
+      RETURNING 1)`;
+  } else if (proof === null) {
+    proofStep = `, pr AS (DELETE FROM proofs WHERE member_id = $1::uuid AND month = $3 RETURNING 1)`;
+  }
   const row = await one(
-    `INSERT INTO contributions (member_id, stokvel_id, month, status, amount, confirmed_by)
-     VALUES ($1::uuid, $2::uuid, $3, $4, $5::int, $6::uuid)
-     ON CONFLICT (member_id, month) DO UPDATE SET
-       status = EXCLUDED.status, amount = EXCLUDED.amount, confirmed_by = EXCLUDED.confirmed_by, confirmed_at = now()
-     RETURNING member_id::text AS member_id, month, status, amount, ${iso('confirmed_at')} AS at`,
-    [m.id, a.id, month, status, amount, user.id]);
-  await log(a.id, user.id, 'confirmed', { member: m.name, month, status, amount });
-  return { contribution: { memberId: row.member_id, month: row.month, status: row.status, amount: row.amount, at: row.at, byName: user.name } };
+    `WITH c AS (
+       INSERT INTO contributions (member_id, stokvel_id, month, status, amount, paid_on, confirmed_by)
+       VALUES ($1::uuid, $2::uuid, $3, $4, $5::int, $6, $7::uuid)
+       ON CONFLICT (member_id, month) DO UPDATE SET
+         status = EXCLUDED.status, amount = EXCLUDED.amount, paid_on = EXCLUDED.paid_on,
+         confirmed_by = EXCLUDED.confirmed_by, confirmed_at = now()
+       RETURNING member_id::text AS member_id, month, status, amount, paid_on, ${iso('confirmed_at')} AS at
+     )${proofStep}
+     SELECT c.*, p.name AS proof_name, p.type AS proof_type, p.size AS proof_size, ${iso('p.uploaded_at')} AS proof_at
+       FROM c LEFT JOIN proofs p ON p.member_id = $1::uuid AND p.month = $3`, values);
+  // The SELECT sees the proof as it was before this statement, so describe a new or removed one directly.
+  const saved = proof ? { name: proof.name, type: proof.type, size: proof.buf.length, at: row.at } : proof === null ? null : proofMeta(row);
+  await log(a.id, user.id, 'confirmed', {
+    member: m.name, month, status, amount, paidOn, ...(proof ? { proof: 'added' } : proof === null && row.proof_type ? { proof: 'removed' } : {}),
+  });
+  return {
+    contribution: {
+      memberId: row.member_id, month: row.month, status: row.status, amount: row.amount, paidOn: row.paid_on,
+      at: row.at, byName: user.name, proof: saved,
+    },
+  };
+}
+
+// A proof of payment, for the treasurer or the member it belongs to.
+async function getProof({ res, params, user }) {
+  const a = await access(params[0], user);
+  const memberId = params[1], month = params[2];
+  if (!(a.isTreasurer || memberId === a.my_member_id)) fail(404, 'We couldn’t find that proof of payment.', 'not_found');
+  const p = await one(
+    `SELECT name, type, encode(data, 'base64') AS b64 FROM proofs
+      WHERE stokvel_id = $1::uuid AND member_id = $2::uuid AND month = $3`, [a.id, memberId, month]);
+  if (!p || !PROOF_TYPES[p.type]) fail(404, 'We couldn’t find that proof of payment.', 'not_found');
+  const buf = Buffer.from(p.b64, 'base64');
+  res.statusCode = 200;
+  res.setHeader('Content-Type', p.type);
+  res.setHeader('Content-Length', buf.length);
+  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(p.name || 'proof-of-payment' + PROOF_TYPES[p.type])}`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.end(buf);
+  return SENT;
 }
 
 async function putMeeting({ params, user, body }) {
