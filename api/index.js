@@ -3,8 +3,9 @@ import crypto from 'node:crypto';
 import { q, one, ensureSchema, dbConfigured, iso } from '../lib/db.js';
 import {
   COOKIE, SESSION_DAYS, normalizePhone, oldPhoneForm, formatPhone, hashPassword, verifyPassword,
-  newToken, sha256, safeEqual, readCookie, sessionCookie,
+  newToken, sha256, safeEqual, readCookie, sessionCookie, needsRehash, passwordProblem,
 } from '../lib/auth.js';
+import { overLimit, countTry, security, maskPhone, tidy } from '../lib/guard.js';
 import {
   KEY_RE, DATE_RE, STATUSES, ATTENDANCE, TITLES, addMonths, monthDiff, isActive, rotation, saMonth, saToday, isoDate,
 } from '../public/logic.js';
@@ -59,6 +60,7 @@ export default async function handler(req, res) {
     }
     if (!route) fail(known ? 405 : 404, known ? 'That action is not allowed here.' : 'Not found.');
     if (method !== 'GET' && !(req.headers['x-stokvel'] === '1' && sameOrigin(req))) {
+      await security(req, 'csrf_blocked', { path, origin: String(req.headers.origin || '').slice(0, 200) });
       fail(403, 'This request was blocked. Reload the page and try again.', 'blocked');
     }
     if (!dbConfigured()) {
@@ -92,8 +94,27 @@ function send(res, status, data) {
   res.statusCode = status;
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');
+  // API answers are data, never pages: nothing in them may load or run.
+  res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
   res.end(JSON.stringify(data));
 }
+
+// Per-address limits on guessing. Failed logins and setup codes are counted; a successful
+// login doesn't use up anyone's tries, so people sharing a mobile network aren't locked out.
+const LIMITS = {
+  login: { max: 20, windowSec: 15 * 60, message: 'Too many wrong tries from this network. Wait 15 minutes, then try again.' },
+  setup: { max: 10, windowSec: 60 * 60, message: 'Too many tries. Wait an hour, then try again.' },
+  join: { max: 20, windowSec: 60 * 60, message: 'Too many sign-ups from this network. Wait an hour, then try again.' },
+  password: { max: 10, windowSec: 60 * 60, message: 'Too many tries. Wait an hour, then try again.' },
+};
+async function needTries(req, name) {
+  const l = LIMITS[name];
+  if (await overLimit(req, name, l.max)) {
+    await security(req, 'rate_limited', { limiter: name });
+    fail(429, l.message, 'rate_limited');
+  }
+}
+const spendTry = (req, name) => countTry(req, name, LIMITS[name].windowSec);
 
 async function readBody(req, limit) {
   let pre;
@@ -174,10 +195,9 @@ function phoneOf(v) {
   return p;
 }
 function passwordOf(v) {
-  const s = typeof v === 'string' ? v : '';
-  if (s.length < 6) fail(400, 'Use a password of at least 6 characters.');
-  if (s.length > 200) fail(400, 'That password is too long.');
-  return s;
+  const problem = passwordProblem(v);
+  if (problem) fail(400, problem, 'weak_password');
+  return v;
 }
 function uuidOf(v) {
   const s = String(v || '');
@@ -266,8 +286,13 @@ async function getSession({ user }) {
 async function postSetup({ req, res, body }) {
   const code = setupCode();
   if (!code) fail(403, 'Setup is switched off. Add a SETUP_CODE environment variable in Vercel, then redeploy.', 'setup_off');
+  await needTries(req, 'setup');
+  await spendTry(req, 'setup');
   const given = String(body.code || '').toUpperCase().replace(/\s+/g, '');
-  if (!safeEqual(given, code)) fail(403, 'That setup code doesn’t match. Check it and try again.', 'setup_code');
+  if (!safeEqual(given, code)) {
+    await security(req, 'setup_code_wrong');
+    fail(403, 'That setup code doesn’t match. Check it and try again.', 'setup_code');
+  }
   const name = text(body.name, 'your name');
   const phone = phoneOf(body.phone);
   const hash = await hashPassword(passwordOf(body.password));
@@ -276,6 +301,7 @@ async function postSetup({ req, res, body }) {
      SELECT $1, $2, $3, true WHERE NOT EXISTS (SELECT 1 FROM users)
      RETURNING id::text AS id`, [phone, name, hash]);
   if (!row) fail(409, 'Setup is already done. Log in instead.', 'setup_done');
+  await security(req, 'setup_done', {}, { userId: row.id, level: 'info' });
   await startSession(req, res, row.id);
   return { user: publicUser({ id: row.id, name, phone, is_admin: true }) };
 }
@@ -283,8 +309,9 @@ async function postSetup({ req, res, body }) {
 // A phone number as typed, and the form older accounts may have stored it in.
 const phoneForms = input => { const p = phoneOf(input); return [p, oldPhoneForm(p)]; };
 
-async function checkPassword(input, password) {
+async function checkPassword(req, input, password) {
   const [phone, legacy] = phoneForms(input);
+  await needTries(req, 'login');
   const lock = await one(`SELECT count, (last_at > now() - interval '15 minutes') AS recent FROM login_failures WHERE phone = $1`, [phone]);
   if (lock && lock.recent && lock.count >= 8) fail(429, 'Too many wrong tries. Wait 15 minutes, then try again.', 'locked');
   const user = await one(
@@ -292,21 +319,30 @@ async function checkPassword(input, password) {
       WHERE phone = $1 OR phone = $2 ORDER BY (phone = $1) DESC LIMIT 1`, [phone, legacy]);
   const ok = await verifyPassword(String(password || ''), user ? user.pass_hash : '');
   if (!user || !ok) {
-    await q(
+    await spendTry(req, 'login');
+    const f = await one(
       `INSERT INTO login_failures (phone, count, last_at) VALUES ($1, 1, now())
        ON CONFLICT (phone) DO UPDATE SET
          count = CASE WHEN login_failures.last_at > now() - interval '15 minutes' THEN login_failures.count + 1 ELSE 1 END,
-         last_at = now()`, [phone]);
+         last_at = now()
+       RETURNING count`, [phone]);
+    const detail = { phone: maskPhone(phone), reason: user ? 'bad_password' : 'no_account' };
+    await security(req, f.count === 8 ? 'account_locked' : 'login_failed', detail, { userId: user ? user.id : null });
     fail(401, 'That phone number and password don’t match.', 'login');
   }
   if (lock) await q(`DELETE FROM login_failures WHERE phone = $1`, [phone]);
+  // Hashes made with an older, cheaper setting are upgraded while we have the password.
+  if (needsRehash(user.pass_hash)) {
+    await q(`UPDATE users SET pass_hash = $2 WHERE id = $1::uuid`, [user.id, await hashPassword(String(password))]);
+  }
   return user;
 }
 
 async function postLogin({ req, res, body }) {
-  const user = await checkPassword(body.phone, body.password);
+  const user = await checkPassword(req, body.phone, body.password);
   await startSession(req, res, user.id);
   await q(`DELETE FROM sessions WHERE expires_at < now()`);
+  if (Math.random() < 0.1) await tidy();
   return { user: publicUser(user) };
 }
 
@@ -316,18 +352,25 @@ async function postLogout({ req, res, user }) {
   return { ok: true };
 }
 
-async function patchAccount({ user, body }) {
+async function patchAccount({ req, user, body }) {
   if (body.name !== undefined) {
     const name = text(body.name, 'your name');
     await q(`UPDATE users SET name = $2 WHERE id = $1::uuid`, [user.id, name]);
     user.name = name;
   }
   if (body.newPassword !== undefined) {
+    // A stolen session must not be able to guess its way to the password itself.
+    await needTries(req, 'password');
     const row = await one(`SELECT pass_hash FROM users WHERE id = $1::uuid`, [user.id]);
-    if (!(await verifyPassword(String(body.currentPassword || ''), row.pass_hash))) fail(400, 'Your current password isn’t right.', 'password');
+    if (!(await verifyPassword(String(body.currentPassword || ''), row.pass_hash))) {
+      await spendTry(req, 'password');
+      await security(req, 'password_change_failed', {}, { userId: user.id });
+      fail(400, 'Your current password isn’t right.', 'password');
+    }
     const hash = await hashPassword(passwordOf(body.newPassword));
     await q(`UPDATE users SET pass_hash = $2 WHERE id = $1::uuid`, [user.id, hash]);
     await q(`DELETE FROM sessions WHERE user_id = $1::uuid AND token_hash <> $2`, [user.id, sha256(user.token)]);
+    await security(req, 'password_changed', {}, { userId: user.id, level: 'info' });
   }
   return { user: publicUser(user) };
 }
@@ -394,6 +437,8 @@ async function acceptInvite({ req, res, params, user, body }) {
   checkInvite(inv);
 
   if (!user && body.mode !== 'login') {
+    await needTries(req, 'join');
+    await spendTry(req, 'join');
     const name = text(body.name, 'your name');
     const [phone, legacy] = phoneForms(body.phone);
     const hash = await hashPassword(passwordOf(body.password));
@@ -427,7 +472,7 @@ async function acceptInvite({ req, res, params, user, body }) {
 
   let userId = user && user.id;
   if (!user) {
-    const u = await checkPassword(body.phone, body.password);
+    const u = await checkPassword(req, body.phone, body.password);
     userId = u.id;
     await startSession(req, res, userId);
   }

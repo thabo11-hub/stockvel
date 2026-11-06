@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "ask": [
+      "Bash(npm install)", "Bash(npm install *)", "Bash(npm i *)", "Bash(npm add *)", "Bash(npm ci)",
+      "Bash(npm uninstall *)", "Bash(npm update *)", "Bash(npm audit fix *)", "Bash(npx *)",
+      "Bash(pnpm add *)", "Bash(pnpm install *)", "Bash(yarn add *)", "Bash(bun add *)",
+      "Bash(pip install *)", "Bash(pip3 install *)",
+      "Bash(git push *)", "Bash(git reset --hard *)", "Bash(git clean *)", "Bash(git rebase *)",
+      "Bash(git filter-repo *)", "Bash(git filter-branch *)",
+      "Bash(rm -rf *)", "Bash(rm -r *)", "Bash(sudo *)", "Bash(chmod *)",
+      "Bash(curl *)", "Bash(wget *)", "Bash(vercel *)", "Bash(psql *)"
+    ],
+    "deny": [
+      "WebFetch",
+      "WebSearch",
+      "Read(./.env)",
+      "Read(./.env.local)",
+      "Read(./.env.development)",
+      "Read(./.env.development.local)",
+      "Read(./.env.production)",
+      "Read(./.env.production.local)"
+    ]
+  }
+}

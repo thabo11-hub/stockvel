@@ -107,12 +107,15 @@ export function localPg({ socketDir, port = 5432, user = 'postgres', database = 
     conn.sock.write(Buffer.concat([head, body]));
   });
 
-  return function query(text, params = []) {
+  function query(text, params = []) {
     const job = queue.then(async () => {
       if (!conn) conn = await connect();
       return run(substitute(text, params));
     });
     queue = job.catch(() => {});
     return job;
-  };
+  }
+  // Lets tests and scripts finish: an open socket keeps Node running.
+  query.close = () => queue.then(() => { if (conn) conn.sock.end(); conn = null; });
+  return query;
 }
