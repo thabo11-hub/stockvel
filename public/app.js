@@ -400,7 +400,7 @@ function setupHTML() {
     ${field('suCode', 'Setup code', '<input id="suCode" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX-XXXX">')}
     ${field('suName', 'Your name', '<input id="suName" autocomplete="name" maxlength="60">')}
     ${field('suPhone', 'Phone number', phoneInput('suPhone'))}
-    ${passwordField('suPass', 'Password', 'new-password', 'At least 6 characters.')}
+    ${passwordField('suPass', 'Password', 'new-password', 'At least 8 characters.')}
     <p class="form-error" id="formErr" role="alert" hidden></p>
     <button type="submit" class="btn btn--primary" id="formSubmit">Create my account</button>
   </form></section>`;
@@ -442,7 +442,7 @@ function joinHTML() {
       <form class="form" id="joinForm" novalidate>
         ${isNew ? field('jnName', 'Your name', `<input id="jnName" autocomplete="name" maxlength="60" value="${esc(draft.name == null ? m.name : draft.name)}">`) : ''}
         ${field('jnPhone', 'Phone number', phoneInput('jnPhone', draft.phone))}
-        ${passwordField('jnPass', isNew ? 'Choose a password' : 'Password', isNew ? 'new-password' : 'current-password', isNew ? 'At least 6 characters. You’ll log in with your phone number and this password.' : '')}
+        ${passwordField('jnPass', isNew ? 'Choose a password' : 'Password', isNew ? 'new-password' : 'current-password', isNew ? 'At least 8 characters. You’ll log in with your phone number and this password.' : '')}
         <p class="form-error" id="formErr" role="alert" hidden></p>
         <button type="submit" class="btn btn--primary" id="formSubmit">${isNew ? 'Create my login and join' : 'Log in and join'}</button>
       </form>`;
@@ -1442,7 +1442,7 @@ function accountSheetHTML() {
     <hr class="divider">
     <form id="passwordForm" class="form" novalidate>
       ${passwordField('pwOld', 'Current password', 'current-password')}
-      ${passwordField('pwNew', 'New password', 'new-password', 'At least 6 characters. Other devices will be logged out.')}
+      ${passwordField('pwNew', 'New password', 'new-password', 'At least 8 characters. Other devices will be logged out.')}
       <p class="form-error" id="pwErr" role="alert" hidden></p>
       <button type="submit" class="btn" id="pwSave">Change password</button>
     </form>

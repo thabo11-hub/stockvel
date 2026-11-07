@@ -1,0 +1,51 @@
+# Security checks on every pull request, every push to main, and every Monday
+# (new vulnerabilities in dependencies are published all the time).
+name: Security checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the secret scan reads every commit on every branch
+
+      - name: Scan every commit for leaked keys and passwords
+        run: python3 .github/scripts/secret_scan.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Known vulnerabilities in dependencies
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm audit --omit=dev --audit-level=high
+
+      - name: Start a throwaway Postgres
+        run: |
+          sudo systemctl start postgresql.service
+          sudo -u postgres createuser --superuser "$USER"
+          createdb stokvel_test
+
+      - name: Attack the app (security tests)
+        env:
+          LOCAL_PG_SOCKET: /var/run/postgresql
+          LOCAL_PG_DB: stokvel_test
+        run: npm test

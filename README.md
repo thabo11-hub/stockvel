@@ -13,8 +13,9 @@ A shared contributions book for stokvels. One login, many stokvels: each stokvel
 ## Setting it up on Vercel
 
 1. **Database.** In the Vercel project, open **Storage → Create Database → Neon** (the free plan is enough) and connect it to the project. This adds `DATABASE_URL`. The app creates its tables on first use.
-2. **Setup code.** Add an environment variable `SETUP_CODE` with any code you choose. It is needed once, to create the first account, and stops working as soon as one account exists.
-3. **Redeploy**, open the site, and create your account with the setup code.
+2. **Setup code.** Add an environment variable `SETUP_CODE` with a long code you choose (at least 12 random characters). It is needed once, to create the first account, and stops working as soon as one account exists. Delete it afterwards.
+3. **Alerts (optional).** Add `ALERT_WEBHOOK_URL` with a Slack, Discord or Teams incoming-webhook URL to be told when one address makes 15 suspicious requests in 10 minutes.
+4. **Redeploy**, open the site, and create your account with the setup code.
 
 After that, start a stokvel, pick its treasurer, and send invite links from **Members**.
 
@@ -35,6 +36,23 @@ LOCAL_PG_SOCKET=/var/run/postgresql LOCAL_PG_DB=stokvel SETUP_CODE="TEST-1234" n
 
 The app runs on http://localhost:3000.
 
+## Security
+
+| Protection | How |
+| --- | --- |
+| Passwords | scrypt (N=32768) with a random salt; at least 8 characters, common ones refused; older hashes upgraded at the next login |
+| Sessions | random 256-bit token in an `HttpOnly`, `SameSite=Lax`, `Secure` cookie; only its SHA-256 is stored; logout and password changes end sessions on the server |
+| Guessing | a phone number locks for 15 minutes after 8 wrong passwords; each address gets 20 failed logins per 15 minutes, 10 setup-code tries and 20 sign-ups per hour (kept in Postgres, shared by every instance) |
+| CSRF | changes need the `X-Stokvel` header and a same-origin `Origin` |
+| Access | members see only their own payments; only the treasurer confirms payments or changes the stokvel; other stokvels are invisible |
+| SQL | only `$1` placeholders |
+| XSS | every name is escaped; the CSP allows scripts from this site only |
+| Uploads | proof of payment must really be a JPG, PNG, WebP or PDF (checked from its bytes), at most 3 MB |
+| Headers | CSP, HSTS, X-Frame-Options, nosniff, Referrer-Policy, Permissions-Policy, COOP/CORP; API answers carry `default-src 'none'` |
+| Logging | failed logins, lock-outs, rate limits, blocked requests and wrong setup codes go to the `security_log` table and the Vercel logs, with phone numbers masked; optional alerts via `ALERT_WEBHOOK_URL` |
+
+`npm test` starts the app on a throwaway local Postgres and attacks it: CSRF, brute force, IDOR, SQL injection, file-upload tricks, session replay and XSS in a real browser (when Playwright is installed). The same tests, a secret scan of every commit and `npm audit` run on every pull request (`.github/workflows/security.yml`).
+
 ## How it's built
 
 - `public/` holds the web app: plain HTML, CSS and JavaScript, with no build step.
@@ -42,7 +60,7 @@ The app runs on http://localhost:3000.
   - `public/logic.js` contains the month and money rules, shared by the browser and the API.
   - `public/css/` holds the styles (see below).
 - `api/index.js` is a single Vercel function that serves every `/api/*` route.
-- `lib/db.js` holds the Neon connection and the schema. `lib/auth.js` handles phone numbers, password hashing (scrypt) and session cookies.
+- `lib/db.js` holds the Neon connection and the schema. `lib/auth.js` handles phone numbers, password hashing (scrypt) and session cookies. `lib/guard.js` keeps the per-address limits and the security log.
 - `scripts/dev.mjs` is the local server. It sends the same security headers as production. `scripts/pg-local.mjs` is a tiny Postgres client for local testing.
 
 ### Styles
